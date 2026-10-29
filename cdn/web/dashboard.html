@@ -1,0 +1,529 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CDN Control Room</title>
+<link rel="icon" href="/content/static:logo.svg" type="image/svg+xml">
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --surface-2: #f0efec;
+  --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4;
+  --good: #0ca30c; --warning: #fab219; --critical: #d03b3b;
+  --btn: #0b0b0b; --btn-ink: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --surface-2: #262624;
+    --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
+    --btn: #f0efec; --btn-ink: #0b0b0b;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --surface-2: #262624;
+  --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
+  --btn: #f0efec; --btn-ink: #0b0b0b;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+a { color: var(--s1); }
+.wrap { max-width: 1280px; margin: 0 auto; padding: 0 16px 60px; }
+header.top { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 0; flex-wrap: wrap; }
+header.top h1 { font-size: 20px; margin: 0; }
+header.top .sub { color: var(--ink-2); font-size: 13px; }
+.links { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 99px; background: var(--surface-2); font-weight: 600; font-size: 12px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-top: 16px; }
+.panel h2 { font-size: 14px; margin: 0 0 4px; }
+.panel .hint { color: var(--ink-2); font-size: 12px; margin: 0 0 12px; }
+.row { display: grid; gap: 16px; }
+.row.two { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.row.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+/* topology */
+.topo { display: grid; grid-template-columns: 1fr 1fr 1.2fr 1.1fr 1.1fr; gap: 26px; align-items: center; }
+.col { display: flex; flex-direction: column; gap: 10px; position: relative; }
+.col:not(:last-child)::after { content: "→"; position: absolute; right: -20px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 18px; }
+.node { border: 1px solid var(--border); border-radius: 10px; padding: 10px; background: var(--surface); }
+.node.down { border-color: var(--critical); box-shadow: inset 0 0 0 1px var(--critical); }
+.node .name { font-weight: 700; display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.node .role { color: var(--muted); font-size: 11px; }
+.node .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px; margin: 8px 0; font-size: 12px; font-variant-numeric: tabular-nums; }
+.node .stats b { font-weight: 600; }
+.node .stats span { color: var(--ink-2); }
+.status { font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; gap: 4px; }
+button, select, input { font: inherit; color: var(--ink); }
+button { border: 1px solid var(--border); background: var(--surface-2); padding: 6px 10px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 12px; }
+button:hover { border-color: var(--axis); }
+button.primary { background: var(--btn); color: var(--btn-ink); border-color: var(--btn); }
+button.danger { color: var(--critical); }
+button:disabled { opacity: .5; cursor: not-allowed; }
+.node button { width: 100%; }
+
+/* KPI tiles */
+.tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+.tile .label { color: var(--ink-2); font-size: 12px; }
+.tile .value { font-size: 26px; font-weight: 650; margin-top: 2px; }
+.tile .note { color: var(--muted); font-size: 11px; }
+
+/* layer mix */
+.stack { display: flex; height: 26px; gap: 2px; margin: 8px 0 10px; }
+.stack div { min-width: 0; height: 100%; }
+.stack div:first-child { border-radius: 4px 0 0 4px; }
+.stack div:last-child { border-radius: 0 4px 4px 0; }
+.stack .empty { flex: 1; background: var(--surface-2); border-radius: 4px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--ink-2); }
+.legend span { display: inline-flex; gap: 6px; align-items: center; }
+.legend b { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+/* charts */
+.chart { position: relative; height: 150px; }
+.chart svg { width: 100%; height: 100%; display: block; overflow: visible; }
+.tip { position: absolute; pointer-events: none; background: var(--ink); color: var(--page); font-size: 12px; padding: 4px 8px; border-radius: 6px; white-space: nowrap; transform: translate(-50%, -120%); display: none; }
+.chart-title { display: flex; justify-content: space-between; color: var(--ink-2); font-size: 12px; }
+.chart-title b { color: var(--ink); font-size: 16px; }
+
+/* controls */
+.controls label { display: flex; justify-content: space-between; gap: 8px; align-items: center; margin: 8px 0; color: var(--ink-2); font-size: 13px; }
+.controls input[type=range] { flex: 1; max-width: 55%; }
+.controls input[type=number] { width: 80px; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); }
+.btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.msg { font-size: 12px; color: var(--ink-2); min-height: 18px; margin-top: 8px; }
+
+/* tables */
+table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+th { text-align: left; color: var(--muted); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--axis); white-space: nowrap; }
+td { padding: 6px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+td.num, th.num { text-align: right; }
+.scroll { overflow-x: auto; }
+.reqs { max-height: 320px; overflow: auto; }
+
+/* benchmark results */
+.bench { margin-top: 14px; border-top: 1px solid var(--grid); padding-top: 12px; }
+.bench h3 { font-size: 13px; margin: 0; }
+.bench p { margin: 2px 0 10px; color: var(--ink-2); font-size: 12px; }
+.bars { display: grid; grid-template-columns: minmax(120px, 190px) 1fr; gap: 6px 10px; align-items: center; margin-bottom: 10px; font-size: 12px; }
+.bar { height: 16px; background: var(--s1); border-radius: 0 4px 4px 0; min-width: 2px; position: relative; }
+.bar-wrap { display: flex; align-items: center; gap: 8px; }
+.bar-wrap span { color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.kv { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--ink-2); margin: 6px 0 4px; }
+.kv b { color: var(--ink); }
+
+@media (max-width: 1000px) {
+  .topo { grid-template-columns: 1fr; gap: 22px; }
+  .col:not(:last-child)::after { content: "↓"; right: 50%; top: auto; bottom: -21px; transform: none; }
+  .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .row.two, .row.three { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div><h1>Edge CDN · Origin Shield — control room</h1>
+      <div class="sub">Router → 3 edge caches (Redis) → shared origin shield (Redis + request collapsing) → MinIO origin</div></div>
+    <div class="links"><span class="pill" id="overall"><span class="dot"></span>…</span>
+      <a href="/">Newspaper</a><a href="/docs">API docs</a></div>
+  </header>
+
+  <section class="panel">
+    <h2>Topology</h2>
+    <p class="hint">Live per-node stats. “Fail” simulates an outage of that component; requests reroute, bypass or fall back to stale copies.</p>
+    <div class="topo" id="topo"></div>
+  </section>
+
+  <section class="tiles" id="tiles" style="margin-top:16px"></section>
+
+  <section class="panel">
+    <h2>Where requests were served</h2>
+    <p class="hint">Share of all requests by the layer that answered them, since the last metrics reset.</p>
+    <div class="stack" id="stack"><div class="empty"></div></div>
+    <div class="legend" id="legend"></div>
+  </section>
+
+  <div class="row two">
+    <section class="panel"><div class="chart-title"><span>Throughput (requests/s, router)</span><b id="rps-now">0</b></div>
+      <div class="chart" id="chart-rps"></div></section>
+    <section class="panel"><div class="chart-title"><span>p95 latency (ms, router, last 5000 requests)</span><b id="p95-now">0</b></div>
+      <div class="chart" id="chart-p95"></div></section>
+  </div>
+
+  <div class="row three">
+    <section class="panel controls">
+      <h2>Traffic generator</h2>
+      <p class="hint">Sends newspaper requests from this browser with Zipf popularity (hot breaking news, long tail).</p>
+      <label>Requests / second <input type="range" id="rps" min="1" max="80" value="15"><b id="rps-val">15</b></label>
+      <label>Pattern <select id="pattern"><option value="zipf">Realistic (Zipf mix)</option>
+        <option value="breaking">Breaking-news burst (one hot article)</option><option value="uniform">Uniform (cache-unfriendly)</option></select></label>
+      <div class="btns"><button class="primary" id="traffic">Start traffic</button></div>
+      <div class="msg" id="traffic-msg">Idle.</div>
+    </section>
+
+    <section class="panel controls">
+      <h2>Cache &amp; origin</h2>
+      <p class="hint">Changes are pushed to every node.</p>
+      <label>Request collapsing <select id="collapsing"><option value="true">On</option><option value="false">Off</option></select></label>
+      <label>Origin delay <input type="range" id="delay" min="0" max="1000" step="10" value="120"><b id="delay-val">120 ms</b></label>
+      <label>Breaking-news TTL (s) <input type="number" id="ttl-breaking" min="1" value="20"></label>
+      <label>Image TTL (s) <input type="number" id="ttl-image" min="1" value="1800"></label>
+      <div class="btns"><button id="apply">Apply</button><button id="flush-all">Flush all</button>
+        <button id="flush-edges">Flush edges</button><button id="flush-shield">Flush shield</button></div>
+      <div class="msg" id="config-msg"></div>
+    </section>
+
+    <section class="panel controls">
+      <h2>Newsroom &amp; metrics</h2>
+      <p class="hint">Publishing writes to MinIO and purges the cached homepage index everywhere.</p>
+      <div class="btns"><button class="primary" id="publish">Publish breaking news</button>
+        <button id="restore">Restore all components</button><button id="reset">Reset metrics</button></div>
+      <div class="msg" id="news-msg"></div>
+    </section>
+  </div>
+
+  <section class="panel">
+    <h2>Benchmarks</h2>
+    <p class="hint">Runs server-side through the router. Each scenario flushes caches and resets metrics, so live numbers above will jump.</p>
+    <div class="btns">
+      <select id="scenario">
+        <option value="all">All scenarios (~1–2 min)</option>
+        <option value="workload">Realistic workload</option>
+        <option value="direct_vs_edge">Direct origin vs edge cache</option>
+        <option value="shield_vs_origin">Shield hit vs origin fetch</option>
+        <option value="collapsing">With vs without request collapsing</option>
+        <option value="delayed_origin">Normal vs delayed origin</option>
+        <option value="failures">Edge / shield / origin failures</option>
+      </select>
+      <button class="primary" id="run-bench">Run benchmark</button>
+    </div>
+    <div class="msg" id="bench-msg"></div>
+    <div id="bench-results"></div>
+  </section>
+
+  <div class="row two">
+    <section class="panel"><h2>Recent requests</h2><p class="hint">request_id · object · edge · layer · latency</p>
+      <div class="reqs scroll"><table><thead><tr><th>Request</th><th>Object</th><th>Edge</th><th>Layer</th><th class="num">Latency</th></tr></thead>
+        <tbody id="reqs"></tbody></table></div></section>
+    <section class="panel"><h2>Cache contents</h2><p class="hint">Keys held per Redis instance (fresh / expired-but-kept for stale serving).</p>
+      <div class="scroll"><table><thead><tr><th>Node</th><th class="num">Fresh</th><th class="num">Stale</th><th>Memory</th><th>Extra</th></tr></thead>
+        <tbody id="caches"></tbody></table></div></section>
+  </div>
+</div>
+
+<script>
+"use strict";
+const LAYERS = [
+  ["HIT-EDGE", "Edge hit", "--s1"],
+  ["HIT-SHIELD", "Shield hit", "--s2"],
+  ["MISS-ORIGIN", "Origin fetch", "--s3"],
+  ["MISS-COLLAPSED", "Collapsed wait", "--s4"],
+  ["STALE", "Stale served", "--s5"],
+  ["ERROR", "Error", "--critical"],
+];
+const layerGroup = (l) => l.startsWith("STALE") ? "STALE" : l === "MISS-ORIGIN-BYPASS" ? "MISS-ORIGIN"
+  : LAYERS.some(([k]) => k === l) ? l : "ERROR";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const pct = (v) => (v * 100).toFixed(1) + "%";
+const fmt = (v, d = 0) => Number(v || 0).toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d });
+const history = { rps: [], p95: [] };
+let last = null;
+
+async function api(path, opts = {}) {
+  const resp = await fetch(path, { headers: { "content-type": "application/json" }, ...opts,
+    body: opts.body ? JSON.stringify(opts.body) : undefined });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error || resp.status);
+  return data;
+}
+
+/* ---------- topology */
+const NODE_ORDER = [["users"], ["router"], ["edge-1", "edge-2", "edge-3"], ["shield"], ["origin"]];
+function nodeCard(name, m, health) {
+  if (name === "users") {
+    return `<div class="node"><div class="name">Readers</div><div class="role">browsers + load generator</div>
+      <div class="stats"><span>sent</span><b>${fmt(gen.sent)}</b><span>failed</span><b>${fmt(gen.failed)}</b></div></div>`;
+  }
+  if (name === "router") {
+    const s = m.summary;
+    return `<div class="node"><div class="name">Router <span class="status"><span class="dot" style="background:var(--good)"></span>UP</span></div>
+      <div class="role">round-robin + health checks</div>
+      <div class="stats"><span>req/s</span><b>${fmt(s.throughput_rps, 1)}</b><span>p95</span><b>${fmt(s.p95_latency_ms, 1)} ms</b>
+      <span>failovers</span><b>${fmt(s.failovers)}</b><span>errors</span><b>${fmt(s.errors)}</b></div></div>`;
+  }
+  const n = m.nodes[name] || {};
+  const up = health[name] ? health[name].up : false;
+  const down = n.down || !up;
+  const c = n.counters || {};
+  const lat = n.latency || {};
+  const status = down ? `<span class="status" style="color:var(--critical)"><span class="dot" style="background:var(--critical)"></span>DOWN</span>`
+    : `<span class="status"><span class="dot" style="background:var(--good)"></span>UP</span>`;
+  let stats = "";
+  if (name.startsWith("edge")) {
+    const req = c.requests || 0;
+    stats = `<span>hit</span><b>${req ? pct((c.hits || 0) / req) : "–"}</b><span>p95</span><b>${fmt(lat.p95_ms, 1)} ms</b>
+      <span>served</span><b>${fmt(req)}</b><span>bypass</span><b>${fmt(c.shield_bypass)}</b>`;
+  } else if (name === "shield") {
+    const req = c.requests || 0;
+    stats = `<span>hit</span><b>${req ? pct((c.hits || 0) / req) : "–"}</b><span>collapsed</span><b>${fmt(c.collapsed)}</b>
+      <span>origin fetch</span><b>${fmt(c.origin_fetches)}</b><span>stale</span><b>${fmt(c.stale_served)}</b>
+      <span>circuit</span><b>${esc(shieldExtra.circuit || "–")}</b><span>pool</span><b>${esc(shieldExtra.pool || "–")}</b>`;
+  } else {
+    stats = `<span>requests</span><b>${fmt(c.origin_requests)}</b><span>p95</span><b>${fmt(lat.p95_ms, 1)} ms</b>
+      <span>errors</span><b>${fmt(c.storage_errors)}</b><span>published</span><b>${fmt(c.published)}</b>`;
+  }
+  const role = name.startsWith("edge") ? "FastAPI + Redis" : name === "shield" ? "FastAPI + shared Redis" : "FastAPI + MinIO";
+  return `<div class="node ${down ? "down" : ""}"><div class="name">${esc(name)} ${status}</div><div class="role">${role}</div>
+    <div class="stats">${stats}</div>
+    <button class="${down ? "" : "danger"}" data-fail="${esc(name)}" data-down="${down ? "false" : "true"}">${down ? "Restore" : "Fail"}</button></div>`;
+}
+let shieldExtra = {};
+function renderTopo(m) {
+  $("topo").innerHTML = NODE_ORDER.map((col) => `<div class="col">${col.map((n) => nodeCard(n, m, m.health)).join("")}</div>`).join("");
+}
+$("topo").addEventListener("click", async (ev) => {
+  const b = ev.target.closest("button[data-fail]");
+  if (!b) return;
+  b.disabled = true;
+  try { await api(`/failure/${b.dataset.fail}`, { method: "POST", body: { down: b.dataset.down === "true" } }); }
+  catch (e) { alert(e.message); }
+  refresh();
+});
+
+/* ---------- tiles + layer mix */
+function renderTiles(s) {
+  const tiles = [
+    ["Requests", fmt(s.total_requests), "through the router"],
+    ["Edge hit ratio", pct(s.edge_hit_ratio), "served by the first edge"],
+    ["Cache hit ratio", pct(s.cache_hit_ratio), "edge + shield + stale"],
+    ["Avg latency", fmt(s.avg_latency_ms, 1) + " ms", `p95 ${fmt(s.p95_latency_ms, 1)} · p99 ${fmt(s.p99_latency_ms, 1)} ms`],
+    ["Throughput", fmt(s.throughput_rps, 1) + " /s", "last 10 s"],
+    ["Origin requests", fmt(s.origin_requests), "reached MinIO"],
+    ["Shield hit ratio", pct(s.shield_hit_ratio), "of edge misses"],
+    ["Collapsing efficiency", pct(s.collapsing_efficiency), `${fmt(s.collapsed_requests)} requests rode along`],
+    ["Stale served", fmt(s.stale_served), `${fmt(s.shield_bypasses)} shield bypasses`],
+    ["Miss rate", pct(s.miss_rate), `${fmt(s.failovers)} failovers · ${fmt(s.errors)} errors`],
+  ];
+  $("tiles").innerHTML = tiles.map(([l, v, n]) => `<div class="tile"><div class="label">${l}</div><div class="value">${v}</div><div class="note">${n}</div></div>`).join("");
+}
+function renderStack(s) {
+  const groups = {};
+  Object.entries(s.layers || {}).forEach(([k, v]) => { const g = layerGroup(k); groups[g] = (groups[g] || 0) + v; });
+  const total = Object.values(groups).reduce((a, b) => a + b, 0);
+  $("stack").innerHTML = total ? LAYERS.filter(([k]) => groups[k]).map(([k, label, color]) =>
+    `<div title="${label}: ${fmt(groups[k])} (${pct(groups[k] / total)})" style="flex:${groups[k]};background:var(${color})"></div>`).join("")
+    : `<div class="empty"></div>`;
+  $("legend").innerHTML = LAYERS.map(([k, label, color]) =>
+    `<span><span class="dot" style="background:var(${color})"></span>${label} <b>${fmt(groups[k] || 0)}</b>${total ? ` (${pct((groups[k] || 0) / total)})` : ""}</span>`).join("");
+}
+
+/* ---------- line charts with hover */
+function lineChart(el, points, unit) {
+  const w = el.clientWidth || 400, h = el.clientHeight || 150, padL = 36, padB = 18;
+  const max = Math.max(1, ...points.map((p) => p.v)) * 1.15;
+  const x = (i) => padL + (i / Math.max(1, 59)) * (w - padL - 4);
+  const y = (v) => (h - padB) - (v / max) * (h - padB - 6);
+  const ticks = [0, max / 2, max].map((t) => `<line x1="${padL}" x2="${w}" y1="${y(t)}" y2="${y(t)}" stroke="var(--grid)"/>
+    <text x="${padL - 6}" y="${y(t) + 4}" text-anchor="end" font-size="10" fill="var(--muted)">${fmt(t, t < 10 ? 1 : 0)}</text>`).join("");
+  const path = points.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.v).toFixed(1)}`).join("");
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${ticks}
+    <line x1="${padL}" x2="${w}" y1="${h - padB}" y2="${h - padB}" stroke="var(--axis)"/>
+    <path d="${path}" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round"/>
+    <text x="${padL}" y="${h - 4}" font-size="10" fill="var(--muted)">${points.length ? "−" + points.length + " s" : ""}</text>
+    <text x="${w}" y="${h - 4}" font-size="10" fill="var(--muted)" text-anchor="end">now</text>
+    <line class="cross" y1="0" y2="${h - padB}" stroke="var(--axis)" visibility="hidden"/>
+    <circle class="pt" r="4" fill="var(--s1)" stroke="var(--surface)" stroke-width="2" visibility="hidden"/>
+    <rect x="${padL}" y="0" width="${w - padL}" height="${h - padB}" fill="transparent"/></svg><div class="tip"></div>`;
+  const svg = el.querySelector("svg"), tip = el.querySelector(".tip");
+  svg.addEventListener("mousemove", (ev) => {
+    if (!points.length) return;
+    const r = svg.getBoundingClientRect();
+    const px = (ev.clientX - r.left) * (w / r.width);
+    const i = Math.max(0, Math.min(points.length - 1, Math.round((px - padL) / (w - padL - 4) * 59)));
+    const p = points[i];
+    svg.querySelector(".cross").setAttribute("x1", x(i)); svg.querySelector(".cross").setAttribute("x2", x(i));
+    svg.querySelector(".cross").setAttribute("visibility", "visible");
+    const c = svg.querySelector(".pt"); c.setAttribute("cx", x(i)); c.setAttribute("cy", y(p.v)); c.setAttribute("visibility", "visible");
+    tip.style.display = "block"; tip.style.left = (x(i) / w * r.width) + "px"; tip.style.top = (y(p.v) / h * r.height) + "px";
+    tip.textContent = `${fmt(p.v, 1)} ${unit} · ${new Date(p.t).toLocaleTimeString()}`;
+  });
+  svg.addEventListener("mouseleave", () => { tip.style.display = "none";
+    svg.querySelectorAll(".cross,.pt").forEach((e) => e.setAttribute("visibility", "hidden")); });
+}
+
+/* ---------- polling */
+async function refresh() {
+  try {
+    const m = await api("/metrics");
+    last = m;
+    const s = m.summary;
+    const h = m.health;
+    const downs = Object.entries(h).filter(([, v]) => !v.up).map(([k]) => k);
+    $("overall").innerHTML = downs.length
+      ? `<span class="dot" style="background:var(--critical)"></span>Degraded: ${esc(downs.join(", "))} down`
+      : `<span class="dot" style="background:var(--good)"></span>All components healthy`;
+    renderTopo(m); renderTiles(s); renderStack(s);
+    const now = Date.now();
+    history.rps.push({ t: now, v: s.throughput_rps }); history.p95.push({ t: now, v: s.p95_latency_ms });
+    if (history.rps.length > 60) { history.rps.shift(); history.p95.shift(); }
+    $("rps-now").textContent = fmt(s.throughput_rps, 1); $("p95-now").textContent = fmt(s.p95_latency_ms, 1) + " ms";
+    lineChart($("chart-rps"), history.rps, "req/s"); lineChart($("chart-p95"), history.p95, "ms");
+  } catch (e) {
+    $("overall").innerHTML = `<span class="dot" style="background:var(--critical)"></span>Router unreachable`;
+  }
+}
+async function refreshSlow() {
+  try {
+    const reqs = await api("/api/requests?limit=60");
+    $("reqs").innerHTML = reqs.map((r) => `<tr><td>${esc(r.request_id)}</td><td>${esc(r.object_id)}</td><td>${esc(r.edge_id)}</td>
+      <td><span class="dot" style="background:var(${(LAYERS.find(([k]) => k === layerGroup(r.cache_layer)) || LAYERS[5])[2]})"></span> ${esc(r.cache_layer)}</td>
+      <td class="num">${fmt(r.latency_ms, 1)} ms</td></tr>`).join("") || `<tr><td colspan="5">No requests yet — start traffic or open the newspaper.</td></tr>`;
+    const st = await api("/cache/status");
+    const sh = st.shield || {};
+    shieldExtra = sh.circuit ? { circuit: sh.circuit.state, pool: `${sh.pool.active}/${sh.pool.size} (+${sh.pool.waiting})` } : {};
+    $("caches").innerHTML = Object.entries(st).map(([name, s]) => {
+      const c = s.cache || {};
+      const extra = name === "shield" && s.circuit ? `circuit ${s.circuit.state}, ${s.circuit.trips} trips`
+        : name === "origin" && s.seed ? `seeded: ${s.seed.seeded ? "yes" : "no"}` : s.error ? s.error : s.down ? "DOWN" : "";
+      return `<tr><td>${esc(name)}</td><td class="num">${c.fresh_keys ?? "–"}</td><td class="num">${c.stale_keys ?? "–"}</td>
+        <td>${esc(c.used_memory || c.error || "–")}</td><td>${esc(extra)}</td></tr>`;
+    }).join("");
+  } catch (e) { /* router restarting */ }
+}
+
+/* ---------- traffic generator (in browser) */
+const gen = { on: false, sent: 0, failed: 0, inflight: 0, objects: [], timer: null };
+async function loadObjects() {
+  const idx = await api("/content/index:latest");
+  gen.objects = [];
+  idx.articles.forEach((a) => gen.objects.push(`article:${a.article_id}`, `thumbnail:${a.article_id}`, `image:${a.article_id}`));
+  gen.objects.push("static:homepage.css", "static:app.js", "static:logo.svg", "index:latest");
+  gen.weights = gen.objects.map((_, i) => 1 / Math.pow(i + 1, 1.1));
+  gen.total = gen.weights.reduce((a, b) => a + b, 0);
+}
+function pick() {
+  const mode = $("pattern").value;
+  if (mode === "breaking") return Math.random() < 0.8 ? gen.objects[0] : gen.objects[1 + Math.floor(Math.random() * 3)];
+  if (mode === "uniform") return gen.objects[Math.floor(Math.random() * gen.objects.length)];
+  let r = Math.random() * gen.total;
+  for (let i = 0; i < gen.objects.length; i++) { r -= gen.weights[i]; if (r <= 0) return gen.objects[i]; }
+  return gen.objects[0];
+}
+function tick() {
+  const n = Number($("rps").value) / 10;
+  const count = Math.floor(n) + (Math.random() < n % 1 ? 1 : 0);
+  for (let i = 0; i < count && gen.inflight < 150; i++) {
+    gen.inflight++; gen.sent++;
+    fetch(`/content/${pick()}`, { cache: "no-store" }).then((r) => { if (!r.ok) gen.failed++; return r.arrayBuffer(); })
+      .catch(() => gen.failed++).finally(() => gen.inflight--);
+  }
+  $("traffic-msg").textContent = `Sending ~${$("rps").value} req/s · ${fmt(gen.sent)} sent · ${fmt(gen.failed)} failed`;
+}
+$("traffic").addEventListener("click", async () => {
+  if (gen.on) { clearInterval(gen.timer); gen.on = false; $("traffic").textContent = "Start traffic"; $("traffic-msg").textContent = "Stopped."; return; }
+  try { await loadObjects(); } catch (e) { $("traffic-msg").textContent = "Could not load the article list: " + e.message; return; }
+  gen.on = true; $("traffic").textContent = "Stop traffic"; gen.timer = setInterval(tick, 100);
+});
+$("rps").addEventListener("input", () => { $("rps-val").textContent = $("rps").value; });
+
+/* ---------- config + actions */
+$("delay").addEventListener("input", () => { $("delay-val").textContent = $("delay").value + " ms"; });
+async function loadConfig() {
+  const c = await api("/config");
+  $("collapsing").value = String(c.collapsing); $("delay").value = c.origin_delay_ms; $("delay-val").textContent = c.origin_delay_ms + " ms";
+  $("ttl-breaking").value = c.ttls.breaking; $("ttl-image").value = c.ttls.image;
+}
+$("apply").addEventListener("click", async () => {
+  try {
+    await api("/config", { method: "POST", body: { collapsing: $("collapsing").value === "true", origin_delay_ms: Number($("delay").value),
+      ttls: { breaking: Number($("ttl-breaking").value), image: Number($("ttl-image").value), thumbnail: Number($("ttl-image").value) } } });
+    $("config-msg").textContent = "Applied to all nodes.";
+  } catch (e) { $("config-msg").textContent = "Failed: " + e.message; }
+});
+for (const layer of ["all", "edges", "shield"]) {
+  $(`flush-${layer}`).addEventListener("click", async () => {
+    const r = await api("/cache/flush", { method: "POST", body: { layer } });
+    const n = Object.values(r.result).reduce((a, b) => a + (b.flushed || 0), 0);
+    $("config-msg").textContent = `Flushed ${n} objects from ${layer}.`; refreshSlow();
+  });
+}
+$("publish").addEventListener("click", async () => {
+  try {
+    const r = await api("/api/publish", { method: "POST", body: {} });
+    $("news-msg").innerHTML = `Published <a href="/#/article/${esc(r.published.article_id)}">${esc(r.published.title)}</a>`;
+    if (gen.on) loadObjects();
+  } catch (e) { $("news-msg").textContent = "Publish failed: " + e.message; }
+});
+$("restore").addEventListener("click", async () => { await api("/failure/reset", { method: "POST", body: {} }); $("news-msg").textContent = "All components restored."; refresh(); });
+$("reset").addEventListener("click", async () => { await api("/metrics/reset", { method: "POST" }); history.rps = []; history.p95 = []; gen.sent = gen.failed = 0; refresh(); refreshSlow(); });
+
+/* ---------- benchmarks */
+const LABELS = {
+  workload: "Realistic workload", direct_vs_edge: "Direct origin vs edge cache", shield_vs_origin: "Shield hit vs origin fetch",
+  collapsing: "Request collapsing", delayed_origin: "Normal vs delayed origin", failures: "Failure handling",
+};
+function variants(obj, prefix = "") {
+  const out = [];
+  for (const [k, v] of Object.entries(obj)) {
+    if (!v || typeof v !== "object") continue;
+    if ("avg_ms" in v && "requests" in v) out.push([prefix + k.replace(/_/g, " "), v]);
+    else if (k !== "server" && k !== "layers") out.push(...variants(v, prefix + k.replace(/_/g, " ") + " · "));
+  }
+  return out;
+}
+function renderBench(results) {
+  $("bench-results").innerHTML = Object.entries(results).map(([name, r]) => {
+    const vs = variants(r);
+    const max = Math.max(1, ...vs.map(([, v]) => v.avg_ms));
+    const servers = [];
+    if (r.server) servers.push(["", r.server]);
+    Object.entries(r).forEach(([k, v]) => { if (v && v.server && k !== "server") servers.push([k.replace(/_/g, " ") + ": ", v.server]); });
+    return `<div class="bench"><h3>${esc(LABELS[name] || name)}</h3><p>${esc(r.description || "")}${r.speedup_avg ? ` — edge is <b>${r.speedup_avg}×</b> faster on average` : ""}</p>
+      <div class="bars">${vs.map(([label, v]) => `<div>${esc(label)}</div><div class="bar-wrap"><div class="bar" style="width:${(v.avg_ms / max * 100).toFixed(1)}%"></div>
+        <span>${fmt(v.avg_ms, 1)} ms avg</span></div>`).join("")}</div>
+      <div class="scroll"><table><thead><tr><th>Variant</th><th class="num">Requests</th><th class="num">Success</th><th class="num">Cache hit</th>
+        <th class="num">Avg</th><th class="num">p95</th><th class="num">Throughput</th><th>Layers</th></tr></thead><tbody>
+        ${vs.map(([label, v]) => `<tr><td>${esc(label)}</td><td class="num">${fmt(v.requests)}</td><td class="num">${pct(v.success_rate)}</td>
+          <td class="num">${pct(v.cache_hit_ratio)}</td><td class="num">${fmt(v.avg_ms, 1)} ms</td><td class="num">${fmt(v.p95_ms, 1)} ms</td>
+          <td class="num">${fmt(v.throughput_rps, 1)}/s</td><td>${esc(Object.entries(v.layers).map(([k, n]) => `${k} ${n}`).join(", "))}</td></tr>`).join("")}
+      </tbody></table></div>
+      ${servers.map(([p, s]) => `<div class="kv">${esc(p)}${Object.entries(s).map(([k, v]) => `<span>${esc(k.replace(/_/g, " "))}: <b>${typeof v === "number" && v < 1 && v > 0 ? pct(v) : fmt(v, 0)}</b></span>`).join("")}</div>`).join("")}
+    </div>`;
+  }).join("");
+}
+let benchTimer = null;
+async function pollBench() {
+  const b = await api("/api/benchmark");
+  if (b.running) {
+    $("bench-msg").textContent = `Running “${b.scenario}” for ${Math.round(Date.now() / 1000 - b.started_at)} s…`;
+    $("run-bench").disabled = true;
+    if (!benchTimer) benchTimer = setInterval(pollBench, 1500);
+  } else {
+    $("run-bench").disabled = false;
+    $("bench-msg").textContent = b.error ? "Benchmark failed: " + b.error : Object.keys(b.results).length ? "Latest results:" : "No benchmark run yet.";
+    clearInterval(benchTimer); benchTimer = null;
+  }
+  renderBench(b.results);
+}
+$("run-bench").addEventListener("click", async () => {
+  try { await api("/api/benchmark", { method: "POST", body: { scenario: $("scenario").value } }); }
+  catch (e) { $("bench-msg").textContent = e.message; return; }
+  if (!benchTimer) benchTimer = setInterval(pollBench, 1500);
+  pollBench();
+});
+
+refresh(); refreshSlow(); loadConfig().catch(() => {}); pollBench().catch(() => {});
+setInterval(refresh, 1000); setInterval(refreshSlow, 2500);
+</script>
+</body>
+</html>

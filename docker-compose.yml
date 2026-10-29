@@ -1,0 +1,78 @@
+# Multi-container topology from the project PDF: every component is its own container,
+# so failures can also be reproduced with `docker compose stop edge-2` etc.
+#   docker compose up --build      -> http://localhost:8000  (dashboard: /dashboard)
+
+x-redis: &redis
+  image: redis:7.4-alpine
+  command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+  restart: unless-stopped
+
+x-app: &app
+  build: .
+  image: edge-cdn:latest
+  restart: unless-stopped
+  environment: &app-env
+    MINIO_ENDPOINT: minio:9000
+    MINIO_ACCESS_KEY: cdnadmin
+    MINIO_SECRET_KEY: cdnadmin-secret
+    SHIELD_URL: http://shield:8000
+    ORIGIN_URL: http://origin:8000
+    EDGE_URLS: edge-1=http://edge-1:8000,edge-2=http://edge-2:8000,edge-3=http://edge-3:8000
+
+services:
+  minio:
+    image: pgsty/minio:RELEASE.2026-06-18T00-00-00Z  # community build; upstream images were withdrawn
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: cdnadmin
+      MINIO_ROOT_PASSWORD: cdnadmin-secret
+    ports: ["9001:9001"]   # MinIO console for inspecting the bucket
+    volumes: [minio-data:/data]
+    restart: unless-stopped
+
+  redis-edge-1: *redis
+  redis-edge-2: *redis
+  redis-edge-3: *redis
+  redis-shield:
+    <<: *redis
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+
+  origin:
+    <<: *app
+    command: ["uvicorn", "cdn.origin:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+    environment: { <<: *app-env, NODE_ID: origin }
+    depends_on: [minio]
+
+  shield:
+    <<: *app
+    command: ["uvicorn", "cdn.shield:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+    environment: { <<: *app-env, NODE_ID: shield, REDIS_URL: "redis://redis-shield:6379/0" }
+    depends_on: [redis-shield, origin]
+
+  edge-1:
+    <<: *app
+    command: ["uvicorn", "cdn.edge:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+    environment: { <<: *app-env, NODE_ID: edge-1, REDIS_URL: "redis://redis-edge-1:6379/0" }
+    depends_on: [redis-edge-1, shield]
+
+  edge-2:
+    <<: *app
+    command: ["uvicorn", "cdn.edge:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+    environment: { <<: *app-env, NODE_ID: edge-2, REDIS_URL: "redis://redis-edge-2:6379/0" }
+    depends_on: [redis-edge-2, shield]
+
+  edge-3:
+    <<: *app
+    command: ["uvicorn", "cdn.edge:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+    environment: { <<: *app-env, NODE_ID: edge-3, REDIS_URL: "redis://redis-edge-3:6379/0" }
+    depends_on: [redis-edge-3, shield]
+
+  router:
+    <<: *app
+    command: ["uvicorn", "cdn.router:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+    environment: { <<: *app-env, NODE_ID: router, PORT: "8000" }
+    ports: ["8000:8000"]
+    depends_on: [edge-1, edge-2, edge-3]
+
+volumes:
+  minio-data:
