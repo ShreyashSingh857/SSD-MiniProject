@@ -1,30 +1,31 @@
 """Request router / load balancer: the public entry point of the CDN.
 
 Round-robins requests over healthy edges (with failover), aggregates metrics from every node,
-exposes the control API (flush, failures, config, publish, benchmarks) and serves the
-newspaper site and the monitoring dashboard.
+and exposes the public content API and control API (flush, failures, config, publish, benchmarks).
+The newspaper site and dashboard are a separate static service (services/web).
 """
 from __future__ import annotations
 
 import asyncio
+import hmac
 import itertools
 import time
 import uuid
 from collections import deque
 from contextlib import asynccontextmanager
-from pathlib import Path
 from urllib.parse import quote
 
 import aiohttp
 from fastapi import Body, FastAPI
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, Response
 
-from . import bench, config
-from .config import RuntimeConfig
-from .metrics import Metrics
-from .upstream import get_raw, new_session
+import bench
+from cdncore import config
+from cdncore.config import RuntimeConfig
+from cdncore.metrics import Metrics
+from cdncore.upstream import get_raw, new_session
 
-WEB_DIR = Path(__file__).parent / "web"
 EDGES = config.parse_edges()
 NODES = {**EDGES, "shield": config.SHIELD_URL.rstrip("/"), "origin": config.ORIGIN_URL.rstrip("/")}
 PASS_HEADERS = ("content-type", "x-cache", "x-served-by", "x-content-class", "age", "cache-control")
@@ -42,7 +43,7 @@ NET_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError)
 async def check_node(name: str, url: str) -> None:
     started = time.perf_counter()
     try:
-        status, _, _ = await get_raw(http, f"{url}/health", 1.0)
+        status, _, _ = await get_raw(http, f"{url}/health", config.HEALTH_TIMEOUT_S)
         up = status == 200
     except NET_ERRORS:
         up = False
@@ -56,7 +57,7 @@ async def check_node(name: str, url: str) -> None:
 async def health_loop() -> None:
     while True:
         await asyncio.gather(*(check_node(n, u) for n, u in NODES.items()), return_exceptions=True)
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(config.HEALTH_INTERVAL_S)
 
 
 @asynccontextmanager
@@ -70,6 +71,31 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Edge CDN with Origin Shielding", lifespan=lifespan)
+
+
+class ControlAuth:
+    """ASGI middleware: POST requests change system state, so they need CONTROL_TOKEN when it is set."""
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["method"] == "POST" and config.CONTROL_TOKEN:
+            sent = dict(scope["headers"]).get(b"x-control-token", b"").decode("latin-1")
+            if not hmac.compare_digest(sent, config.CONTROL_TOKEN):
+                await JSONResponse({"error": "control token required"}, status_code=401)(scope, receive, send)
+                return
+        await self.inner(scope, receive, send)
+
+
+app.add_middleware(ControlAuth)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in config.WEB_ORIGINS.split(",") if o.strip()],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["content-type", "x-control-token"],
+    expose_headers=["x-cache", "x-served-by", "x-content-class", "x-latency-ms", "x-request-id", "x-edge-attempts"],
+)
 
 
 def edge_order() -> list[str]:
@@ -113,7 +139,8 @@ async def route(object_id: str) -> Response:
             mark_down(edge)
             resp = None
             continue
-        if resp[0] == 503 and resp[1].get("x-node-down") == "1":
+        # 502/504 come from the hosting proxy: the edge itself is unavailable.
+        if (resp[0] == 503 and resp[1].get("x-node-down") == "1") or resp[0] in (502, 504):
             mark_down(edge)
             resp = None
             continue
@@ -175,7 +202,7 @@ async def get_direct(object_id: str):
 async def node_call(name: str, method: str, path: str, payload: dict | None = None) -> dict:
     try:
         async with http.request(method, f"{NODES[name]}{path}", json=payload,
-                                timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                                timeout=aiohttp.ClientTimeout(total=config.ADMIN_TIMEOUT_S)) as resp:
             return await resp.json(content_type=None)
     except Exception as exc:
         return {"node": name, "error": f"unreachable: {exc.__class__.__name__}"}
@@ -327,7 +354,7 @@ async def run_benchmark(scenario: str, options: dict) -> None:
     benchmark_state.update(running=True, scenario=scenario, started_at=time.time(), error=None)
     try:
         base = f"http://127.0.0.1:{config.PORT}"
-        result = await bench.run(base, scenario, **options)
+        result = await bench.run(base, scenario, config.CONTROL_TOKEN, **options)
         benchmark_state["results"].update(result)
     except Exception as exc:
         benchmark_state["error"] = f"{exc.__class__.__name__}: {exc}"
@@ -353,18 +380,8 @@ async def get_benchmark():
     return benchmark_state
 
 
-# ---------------------------------------------------------------- web pages
+# ---------------------------------------------------------------- service info
 
 @app.get("/", include_in_schema=False)
-async def newspaper():
-    return FileResponse(WEB_DIR / "index.html")
-
-
-@app.get("/dashboard", include_in_schema=False)
-async def dashboard():
-    return FileResponse(WEB_DIR / "dashboard.html")
-
-
-@app.get("/favicon.ico", include_in_schema=False)
-async def favicon():
-    return await route("static:logo.svg")
+async def root():
+    return {"service": "edge-cdn-router", "docs": "/docs", "health": "/health", "metrics": "/metrics"}

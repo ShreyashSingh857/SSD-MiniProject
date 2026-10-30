@@ -12,6 +12,7 @@
     "STALE-EDGE": ["Stale (edge)", "--l-stale"],
     "STALE-SHIELD": ["Stale (shield)", "--l-stale"],
   };
+  const API = window.CDN_API || "";
   const app = document.getElementById("app");
   const log = [];
   let index = null;
@@ -31,7 +32,7 @@
 
   async function cdn(path, as) {
     const started = performance.now();
-    const resp = await fetch(path, { cache: "no-store" });
+    const resp = await fetch(API + path, { cache: "no-store" });
     const entry = {
       path: path.replace("/content/", "").replace("/article/", "article:"),
       layer: resp.headers.get("X-Cache") || (resp.ok ? "?" : "ERROR"),
@@ -72,8 +73,8 @@
     return `
       <div class="wrap">
         <div class="topbar"><span>${today} · Port Halden</span>
-          <span><a href="/dashboard">CDN dashboard →</a></span></div>
-        <header class="masthead"><a href="#/"><img src="/content/static:logo.svg" alt=""><h1>The Daily Edge</h1></a>
+          <span><a href="dashboard.html">CDN dashboard →</a></span></div>
+        <header class="masthead"><a href="#/"><img src="${API}/content/static:logo.svg" alt=""><h1>The Daily Edge</h1></a>
           <div class="tagline">News delivered from the nearest edge</div></header>
         <nav class="sections"><a href="#/" class="${activeSection ? "" : "active"}">Front page</a>${sections}</nav>
         ${breaking.length ? `<div class="ticker"><strong>BREAKING</strong><div class="items">${breaking.map((a) =>
@@ -167,7 +168,7 @@
         <td class="path" title="${esc(e.path)}">${esc(e.path)}</td><td>${dot(e.layer)} ${esc(e.layer)}</td>
         <td>${esc(e.edge)}</td><td style="text-align:right">${e.ms.toFixed(0)} ms</td></tr>`).join("")}</tbody></table>
         <div class="tools"><button id="badges">Toggle image badges</button><button id="reload">Reload page data</button>
-          <a class="btn" href="/dashboard">Open dashboard</a></div></div>`;
+          <a class="btn" href="dashboard.html">Open dashboard</a></div></div>`;
   }
 
   async function route() {

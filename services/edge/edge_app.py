@@ -8,10 +8,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, Response
 
-from . import config
-from .cache import CacheStore, CachedObject
-from .node import NodeState, install_admin
-from .upstream import Fetched, NotFound, UpstreamError, fetch, new_session
+from cdncore import config
+from cdncore.cache import CacheStore, CachedObject
+from cdncore.node import NodeState, install_admin
+from cdncore.upstream import Fetched, NotFound, UpstreamError, fetch, new_session
 
 state = NodeState(config.NODE_ID if config.NODE_ID != "node" else "edge", "edge",
                   CacheStore(config.REDIS_URL, "edge"))

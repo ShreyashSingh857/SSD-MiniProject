@@ -9,10 +9,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, Response
 
-from . import config
-from .cache import CacheStore
-from .node import NodeState, install_admin
-from .upstream import Fetched, NotFound, UpstreamError, fetch, new_session
+from cdncore import config
+from cdncore.cache import CacheStore
+from cdncore.node import NodeState, install_admin
+from cdncore.upstream import Fetched, NotFound, UpstreamError, fetch, new_session
 
 
 class CircuitOpen(Exception):

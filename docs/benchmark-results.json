@@ -4,69 +4,69 @@
     "client": {
       "requests": 1500,
       "success_rate": 1.0,
-      "avg_ms": 143.83,
-      "p50_ms": 1.25,
-      "p95_ms": 1097.17,
-      "p99_ms": 1196.95,
-      "throughput_rps": 257.8,
-      "cache_hit_ratio": 0.8167,
+      "avg_ms": 146.02,
+      "p50_ms": 1.31,
+      "p95_ms": 1114.2,
+      "p99_ms": 1223.2,
+      "throughput_rps": 252.0,
+      "cache_hit_ratio": 0.818,
       "edge_hit_ratio": 0.7513,
       "layers": {
         "MISS-ORIGIN": 162,
-        "MISS-COLLAPSED": 113,
+        "MISS-COLLAPSED": 111,
         "HIT-EDGE": 1127,
-        "HIT-SHIELD": 98
+        "HIT-SHIELD": 100
       },
-      "wall_s": 5.82
+      "wall_s": 5.95
     },
     "server": {
       "origin_requests": 162,
       "shield_origin_fetches": 162,
-      "collapsed_requests": 113,
-      "collapsing_efficiency": 0.4109,
+      "collapsed_requests": 111,
+      "collapsing_efficiency": 0.4066,
       "shield_bypasses": 0,
       "stale_served": 0,
       "failovers": 0,
       "edge_hit_ratio": 0.7513,
-      "cache_hit_ratio": 0.8167
+      "cache_hit_ratio": 0.818
     },
-    "finished_at": 1793290349.321514,
-    "duration_s": 6.0
+    "finished_at": 1793378494.2289653,
+    "duration_s": 6.1
   },
   "direct_vs_edge": {
     "description": "Same hot articles fetched directly from origin vs through warm edge caches",
     "direct_origin": {
       "requests": 300,
       "success_rate": 1.0,
-      "avg_ms": 142.87,
-      "p50_ms": 142.72,
-      "p95_ms": 160.19,
-      "p99_ms": 162.23,
-      "throughput_rps": 136.0,
+      "avg_ms": 142.62,
+      "p50_ms": 143.36,
+      "p95_ms": 161.25,
+      "p99_ms": 164.03,
+      "throughput_rps": 135.1,
       "cache_hit_ratio": 0.0,
       "edge_hit_ratio": 0.0,
       "layers": {
         "DIRECT-ORIGIN": 300
       },
-      "wall_s": 2.21
+      "wall_s": 2.22
     },
     "edge_cache": {
       "requests": 300,
       "success_rate": 1.0,
-      "avg_ms": 5.45,
-      "p50_ms": 5.3,
-      "p95_ms": 6.8,
-      "p99_ms": 7.15,
-      "throughput_rps": 3350.7,
+      "avg_ms": 5.98,
+      "p50_ms": 5.7,
+      "p95_ms": 7.96,
+      "p99_ms": 9.41,
+      "throughput_rps": 3050.1,
       "cache_hit_ratio": 1.0,
       "edge_hit_ratio": 1.0,
       "layers": {
         "HIT-EDGE": 300
       },
-      "wall_s": 0.09
+      "wall_s": 0.1
     },
-    "speedup_avg": 26.2,
-    "finished_at": 1793290352.0767179,
+    "speedup_avg": 23.8,
+    "finished_at": 1793378496.9975789,
     "duration_s": 2.8
   },
   "shield_vs_origin": {
@@ -74,26 +74,26 @@
     "origin_fetch": {
       "requests": 30,
       "success_rate": 1.0,
-      "avg_ms": 319.25,
-      "p50_ms": 306.38,
-      "p95_ms": 416.08,
-      "p99_ms": 434.69,
-      "throughput_rps": 26.9,
+      "avg_ms": 324.29,
+      "p50_ms": 346.99,
+      "p95_ms": 415.92,
+      "p99_ms": 415.96,
+      "throughput_rps": 27.0,
       "cache_hit_ratio": 0.0,
       "edge_hit_ratio": 0.0,
       "layers": {
         "MISS-ORIGIN": 30
       },
-      "wall_s": 1.12
+      "wall_s": 1.11
     },
     "shield_hit": {
       "requests": 30,
       "success_rate": 1.0,
-      "avg_ms": 5.26,
-      "p50_ms": 4.75,
-      "p95_ms": 7.08,
-      "p99_ms": 7.15,
-      "throughput_rps": 1681.3,
+      "avg_ms": 5.12,
+      "p50_ms": 4.85,
+      "p95_ms": 7.81,
+      "p99_ms": 8.61,
+      "throughput_rps": 1656.2,
       "cache_hit_ratio": 1.0,
       "edge_hit_ratio": 0.0,
       "layers": {
@@ -104,11 +104,11 @@
     "edge_hit": {
       "requests": 30,
       "success_rate": 1.0,
-      "avg_ms": 3.99,
-      "p50_ms": 3.74,
-      "p95_ms": 5.41,
-      "p99_ms": 5.42,
-      "throughput_rps": 2242.6,
+      "avg_ms": 4.16,
+      "p50_ms": 3.84,
+      "p95_ms": 5.87,
+      "p99_ms": 5.88,
+      "throughput_rps": 2130.5,
       "cache_hit_ratio": 1.0,
       "edge_hit_ratio": 1.0,
       "layers": {
@@ -116,7 +116,7 @@
       },
       "wall_s": 0.01
     },
-    "finished_at": 1793290353.3745959,
+    "finished_at": 1793378498.2866974,
     "duration_s": 1.3
   },
   "collapsing": {
@@ -125,48 +125,48 @@
       "client": {
         "requests": 200,
         "success_rate": 1.0,
-        "avg_ms": 2553.99,
-        "p50_ms": 2479.89,
-        "p95_ms": 5611.94,
-        "p99_ms": 5901.1,
-        "throughput_rps": 33.2,
-        "cache_hit_ratio": 0.175,
-        "edge_hit_ratio": 0.105,
+        "avg_ms": 2735.27,
+        "p50_ms": 2664.64,
+        "p95_ms": 5852.93,
+        "p99_ms": 6146.78,
+        "throughput_rps": 32.1,
+        "cache_hit_ratio": 0.14,
+        "edge_hit_ratio": 0.005,
         "layers": {
-          "MISS-ORIGIN": 165,
-          "HIT-SHIELD": 14,
-          "HIT-EDGE": 21
+          "MISS-ORIGIN": 172,
+          "HIT-SHIELD": 27,
+          "HIT-EDGE": 1
         },
-        "wall_s": 6.02
+        "wall_s": 6.23
       },
       "server": {
-        "origin_requests": 165,
-        "shield_origin_fetches": 165,
+        "origin_requests": 172,
+        "shield_origin_fetches": 172,
         "collapsed_requests": 0,
         "collapsing_efficiency": 0.0,
         "shield_bypasses": 0,
         "stale_served": 0,
         "failovers": 0,
-        "edge_hit_ratio": 0.105,
-        "cache_hit_ratio": 0.175
+        "edge_hit_ratio": 0.005,
+        "cache_hit_ratio": 0.14
       }
     },
     "with_collapsing": {
       "client": {
         "requests": 200,
         "success_rate": 1.0,
-        "avg_ms": 191.32,
-        "p50_ms": 199.02,
-        "p95_ms": 201.04,
-        "p99_ms": 201.31,
-        "throughput_rps": 961.0,
+        "avg_ms": 184.85,
+        "p50_ms": 190.96,
+        "p95_ms": 195.7,
+        "p99_ms": 197.34,
+        "throughput_rps": 987.4,
         "cache_hit_ratio": 0.0,
         "edge_hit_ratio": 0.0,
         "layers": {
-          "MISS-COLLAPSED": 199,
-          "MISS-ORIGIN": 1
+          "MISS-ORIGIN": 1,
+          "MISS-COLLAPSED": 199
         },
-        "wall_s": 0.21
+        "wall_s": 0.2
       },
       "server": {
         "origin_requests": 1,
@@ -180,8 +180,8 @@
         "cache_hit_ratio": 0.0
       }
     },
-    "finished_at": 1793290359.778404,
-    "duration_s": 6.4
+    "finished_at": 1793378504.8879628,
+    "duration_s": 6.6
   },
   "delayed_origin": {
     "description": "Cold (origin) vs warm (edge) latency with a normal vs artificially slow origin",
@@ -189,11 +189,11 @@
       "cold": {
         "requests": 20,
         "success_rate": 1.0,
-        "avg_ms": 9.6,
-        "p50_ms": 9.31,
-        "p95_ms": 13.16,
-        "p99_ms": 14.28,
-        "throughput_rps": 891.1,
+        "avg_ms": 9.96,
+        "p50_ms": 9.08,
+        "p95_ms": 13.5,
+        "p99_ms": 14.81,
+        "throughput_rps": 870.8,
         "cache_hit_ratio": 0.0,
         "edge_hit_ratio": 0.0,
         "layers": {
@@ -204,11 +204,11 @@
       "warm": {
         "requests": 60,
         "success_rate": 1.0,
-        "avg_ms": 3.09,
-        "p50_ms": 2.99,
-        "p95_ms": 3.66,
-        "p99_ms": 3.89,
-        "throughput_rps": 2985.2,
+        "avg_ms": 3.32,
+        "p50_ms": 3.27,
+        "p95_ms": 4.17,
+        "p99_ms": 4.4,
+        "throughput_rps": 2717.2,
         "cache_hit_ratio": 1.0,
         "edge_hit_ratio": 1.0,
         "layers": {
@@ -221,10 +221,10 @@
       "cold": {
         "requests": 20,
         "success_rate": 1.0,
-        "avg_ms": 641.76,
-        "p50_ms": 612.02,
-        "p95_ms": 917.35,
-        "p99_ms": 917.47,
+        "avg_ms": 642.59,
+        "p50_ms": 612.57,
+        "p95_ms": 919.94,
+        "p99_ms": 920.17,
         "throughput_rps": 13.1,
         "cache_hit_ratio": 0.0,
         "edge_hit_ratio": 0.0,
@@ -236,11 +236,11 @@
       "warm": {
         "requests": 60,
         "success_rate": 1.0,
-        "avg_ms": 3.74,
-        "p50_ms": 3.52,
-        "p95_ms": 4.87,
-        "p99_ms": 4.96,
-        "throughput_rps": 2434.4,
+        "avg_ms": 3.37,
+        "p50_ms": 3.34,
+        "p95_ms": 4.14,
+        "p99_ms": 4.25,
+        "throughput_rps": 2726.2,
         "cache_hit_ratio": 1.0,
         "edge_hit_ratio": 1.0,
         "layers": {
@@ -249,7 +249,7 @@
         "wall_s": 0.02
       }
     },
-    "finished_at": 1793290361.5794842,
+    "finished_at": 1793378506.6783233,
     "duration_s": 1.8
   },
   "failures": {
@@ -257,94 +257,94 @@
     "normal": {
       "requests": 300,
       "success_rate": 1.0,
-      "avg_ms": 9.53,
-      "p50_ms": 8.11,
-      "p95_ms": 27.09,
-      "p99_ms": 32.43,
-      "throughput_rps": 1659.5,
+      "avg_ms": 7.47,
+      "p50_ms": 7.25,
+      "p95_ms": 10.78,
+      "p99_ms": 13.42,
+      "throughput_rps": 2433.3,
       "cache_hit_ratio": 1.0,
-      "edge_hit_ratio": 0.68,
+      "edge_hit_ratio": 0.6733,
       "layers": {
-        "HIT-EDGE": 204,
-        "HIT-SHIELD": 96
+        "HIT-EDGE": 202,
+        "HIT-SHIELD": 98
       },
-      "wall_s": 0.18
+      "wall_s": 0.12
     },
     "edge_1_down": {
       "requests": 300,
       "success_rate": 1.0,
-      "avg_ms": 6.83,
-      "p50_ms": 6.38,
-      "p95_ms": 12.37,
-      "p99_ms": 14.85,
-      "throughput_rps": 2696.9,
+      "avg_ms": 7.48,
+      "p50_ms": 7.18,
+      "p95_ms": 10.72,
+      "p99_ms": 12.2,
+      "throughput_rps": 2438.5,
       "cache_hit_ratio": 1.0,
       "edge_hit_ratio": 0.9,
       "layers": {
         "HIT-EDGE": 270,
         "HIT-SHIELD": 30
       },
-      "wall_s": 0.11
+      "wall_s": 0.12
     },
     "shield_down": {
       "requests": 300,
       "success_rate": 1.0,
-      "avg_ms": 76.06,
-      "p50_ms": 126.4,
-      "p95_ms": 160.95,
-      "p99_ms": 163.66,
-      "throughput_rps": 247.7,
-      "cache_hit_ratio": 0.4833,
-      "edge_hit_ratio": 0.4833,
+      "avg_ms": 75.17,
+      "p50_ms": 126.75,
+      "p95_ms": 159.77,
+      "p99_ms": 164.93,
+      "throughput_rps": 250.3,
+      "cache_hit_ratio": 0.48,
+      "edge_hit_ratio": 0.48,
       "layers": {
-        "MISS-ORIGIN-BYPASS": 155,
-        "HIT-EDGE": 145
+        "MISS-ORIGIN-BYPASS": 156,
+        "HIT-EDGE": 144
       },
-      "wall_s": 1.21
+      "wall_s": 1.2
     },
     "origin_down": {
       "requests": 300,
       "success_rate": 1.0,
-      "avg_ms": 5.99,
-      "p50_ms": 5.79,
-      "p95_ms": 7.24,
-      "p99_ms": 7.65,
-      "throughput_rps": 3032.1,
+      "avg_ms": 6.88,
+      "p50_ms": 6.74,
+      "p95_ms": 8.28,
+      "p99_ms": 9.47,
+      "throughput_rps": 2598.5,
       "cache_hit_ratio": 1.0,
       "edge_hit_ratio": 1.0,
       "layers": {
         "HIT-EDGE": 300
       },
-      "wall_s": 0.1
+      "wall_s": 0.12
     },
     "origin_down_expired": {
       "requests": 300,
       "success_rate": 1.0,
-      "avg_ms": 9.99,
-      "p50_ms": 7.03,
-      "p95_ms": 36.04,
-      "p99_ms": 39.86,
-      "throughput_rps": 1855.8,
+      "avg_ms": 8.9,
+      "p50_ms": 7.64,
+      "p95_ms": 26.47,
+      "p99_ms": 31.33,
+      "throughput_rps": 2079.1,
       "cache_hit_ratio": 1.0,
       "edge_hit_ratio": 0.5433,
       "layers": {
         "STALE-SHIELD": 137,
         "HIT-EDGE": 163
       },
-      "wall_s": 0.16
+      "wall_s": 0.14
     },
     "server": {
-      "origin_requests": 572,
-      "shield_origin_fetches": 426,
-      "collapsed_requests": 576,
-      "collapsing_efficiency": 0.5749,
-      "shield_bypasses": 155,
+      "origin_requests": 573,
+      "shield_origin_fetches": 424,
+      "collapsed_requests": 575,
+      "collapsing_efficiency": 0.5756,
+      "shield_bypasses": 156,
       "stale_served": 137,
       "failovers": 0,
-      "edge_hit_ratio": 0.4468,
-      "cache_hit_ratio": 0.5743
+      "edge_hit_ratio": 0.4457,
+      "cache_hit_ratio": 0.574
     },
-    "finished_at": 1793290389.277563,
-    "duration_s": 27.7
+    "finished_at": 1793378534.16077,
+    "duration_s": 27.5
   }
 }

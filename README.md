@@ -1,14 +1,3 @@
----
-title: Edge CDN with Origin Shielding
-emoji: 📰
-colorFrom: red
-colorTo: gray
-sdk: docker
-app_port: 7860
-pinned: false
-short_description: Tiered edge CDN with origin shield and request collapsing
----
-
 # Edge CDN Cache with Origin Shielding
 
 A small tiered CDN built with **Python / FastAPI + Redis + MinIO**. Its traffic comes from a
@@ -17,11 +6,11 @@ instances, an Origin Shield shared by all of them, request collapsing, TTL-based
 type, failure simulation and recovery, live metrics, and the benchmark suite from the project
 document.
 
-- **Newspaper:** `/`. Every article, image, thumbnail, stylesheet and script is fetched through the
+- **Newspaper:** `index.html` on the web service. Every article, image, thumbnail, stylesheet and script is fetched through the
   CDN. Open the *CDN inspector* (bottom right) to see which layer served each object.
-- **Control room:** `/dashboard`. Shows the live topology, hit ratios and latency. It also has the
+- **Control room:** `dashboard.html` on the web service. Shows the live topology, hit ratios and latency. It also has the
   failure buttons, a traffic generator, newsroom publishing and benchmarks.
-- **API docs:** `/docs`.
+- **API docs:** `/docs` on the router.
 
 ## Architecture
 
@@ -75,24 +64,25 @@ Every response says where it was served from:
 | Slow origin | `origin_delay_ms` (dashboard slider) adds artificial latency |
 | Burst of identical misses | Request collapsing: one origin fetch, everyone else waits on it |
 
-## Project layout
+## Microservices
 
-```
-cdn/
-  router.py      public entry point: routing, failover, metrics, control API, pages
-  edge.py        edge cache node
-  shield.py      origin shield: collapsing, origin pool, circuit breaker
-  origin.py      origin service over MinIO: delay, seeding, publishing
-  cache.py       Redis cached-object store
-  node.py        shared admin API (failure, health, metrics, config, flush)
-  upstream.py    aiohttp helpers for hops between layers
-  bench.py       load generator + benchmark scenarios (also a CLI)
-  content/       newspaper generator + static assets (served through the CDN)
-  web/           newspaper shell + dashboard
-deploy/supervisord.conf   single-container process layout (Hugging Face)
-docker-compose.yml        multi-container layout (one container per component)
-tests/                    unit tests + end-to-end tests
-```
+Each service has its own folder, Dockerfile and dependencies, and can be built, deployed and scaled
+on its own. The services talk only over HTTP.
+
+| Service | Folder | Responsibility | Storage |
+|---|---|---|---|
+| Router | `services/router` | Public API, round-robin, failover, metrics, control API, benchmarks | none |
+| Edge (3 instances) | `services/edge` | First-level cache | its own Redis |
+| Shield | `services/shield` | Shared cache, request collapsing, origin pool, circuit breaker | its own Redis |
+| Origin | `services/origin` | Reads MinIO, adds delay, seeds and reseeds content, publishes | none |
+| MinIO | `services/minio` | S3 object storage | `/data` |
+| Web | `services/web` | Newspaper and dashboard static pages | none |
+
+`shared/cdncore` is a small library copied into each Python image at build time: configuration, cache
+store, metrics, service admin API and HTTP helpers.
+
+`docker-compose.yml` runs each service in its own container, and `render.yaml` deploys each as a
+separate Render service. `docker-compose.render-sim.yml` adds Render-like limits for local testing.
 
 ## Where the newspaper data comes from
 
@@ -109,76 +99,60 @@ can add articles while the system is running with **Publish breaking news**.
 docker compose up --build
 ```
 
-Then open http://localhost:8000 (newspaper) and http://localhost:8000/dashboard. MinIO's
-console is at http://localhost:9001 (`cdnadmin` / `cdnadmin-secret`). With every component in
-its own container, you can also cause real failures, for example `docker compose stop edge-2`.
+- Newspaper: http://localhost:8080
+- Dashboard: http://localhost:8080/dashboard.html
+- Router API docs: http://localhost:8000/docs
+- MinIO console: http://localhost:9001 (`cdnadmin` / `cdnadmin-secret`)
 
-The single-container image (the same one Hugging Face runs) can be started like this:
+You can also cause real failures, for example `docker compose stop edge-2`.
+
+To test under Render-like limits (512 MB and 0.1 CPU per service, tokens on every hop, private Redis in
+each cache, MinIO without a disk):
 
 ```bash
-docker build -t edge-cdn . && docker run -p 7860:7860 edge-cdn
+docker compose -f docker-compose.yml -f docker-compose.render-sim.yml up --build
 ```
 
-## Deploy for free on Hugging Face Spaces
+## Deploy on Render
 
-The free CPU tier gives 2 vCPU and 16 GB RAM with no credit card. The whole system uses about
-400–550 MB in one container. Spaces sleep after about 48 h without visitors and wake on the next
-visit, which takes roughly 30 s. MinIO data is re-seeded at each start.
-
-1. Create a free account at https://huggingface.co/join and a **write** token at
-   https://huggingface.co/settings/tokens.
-2. Log in and create the Space:
-   ```bash
-   hf auth login
-   hf repos create <your-username>/edge-cdn --type space --sdk docker --public
-   ```
-3. Upload the project:
-   ```bash
-   hf upload <your-username>/edge-cdn . --repo-type space --exclude "tests/*" --exclude "**/__pycache__/*"
-   ```
-4. Wait for the build (about 3–5 min) on the Space page. The app is then at
-   `https://<your-username>-edge-cdn.hf.space`, with the dashboard at `/dashboard`.
+Every service deploys separately on Render's free plan. **[docs/RENDER_DEPLOYMENT.md](docs/RENDER_DEPLOYMENT.md)**
+lists all settings and environment variables, and how the services connect.
 
 ## Benchmarks
 
 Run them from the dashboard (**Run benchmark**) or from the CLI:
 
 ```bash
-pip install -r requirements.txt
-python -m cdn.bench --url http://localhost:8000 --scenario all --out results.json
+pip install -r requirements-dev.txt
+PYTHONPATH=shared python services/router/bench.py --url http://localhost:8000 --scenario all --out results.json
 ```
 
-The results below were measured on the single-container image limited to 2 CPUs (the same limits
-as the HF free tier), with a 120 ms (+0–40 ms jitter) origin delay. Raw data is in
-[`docs/benchmark-results.json`](docs/benchmark-results.json).
+The results below were measured with `docker compose` on one development machine, without CPU limits,
+with a 120 ms (+0–40 ms jitter) origin delay. Raw data is in
+[`docs/benchmark-results.json`](docs/benchmark-results.json). Numbers on Render's free plan will be
+much worse.
 
 | Comparison | Result |
 |---|---|
-| Direct origin vs edge cache (same hot articles) | 142.9 ms → **5.5 ms** avg (26×), 136 → 3,351 req/s |
-| Origin fetch vs shield hit vs edge hit | 319 ms → **5.3 ms** → **4.0 ms** avg |
-| 200 simultaneous requests for one uncached image, without vs with collapsing | origin requests **165 → 1**; p95 5,612 ms → **201 ms** |
-| Normal vs artificially delayed origin (300 ms) | cold 9.6 ms vs **642 ms**; warm stays 3–4 ms |
-| Realistic Zipf workload, cold caches (1,500 requests) | 81.7% cache hit ratio, 162 origin requests, 113 collapsed |
-| Failures: edge-1 down / shield down / origin down / origin down with expired caches | **100% success in every phase**; shield-down uses 155 bypasses, expired-origin-down serves 137 stale copies |
-
-Real outages were also checked by stopping containers with `docker compose stop`:
-
-| Stopped container | Behavior |
-|---|---|
-| `edge-2` | The first request fails over in about 1.5 s (connect timeout); the edge is then skipped |
-| `shield` | Each edge pays about 1.6 s once, then bypasses the shield for 2 s windows (`MISS-ORIGIN-BYPASS`) |
-| `minio` | Cached articles are still served in about 5 ms. Uncached ones return 503 without marking edges down, and they recover once MinIO is back |
+| Direct origin vs edge cache (same hot articles) | 142.6 ms → **6.0 ms** avg (24×), 135 → 3,050 req/s |
+| Origin fetch vs shield hit vs edge hit | 324 ms → **5.1 ms** → **4.2 ms** avg |
+| 200 simultaneous requests for one uncached image, without vs with collapsing | origin requests **172 → 1**; p95 5,853 ms → **196 ms** |
+| Normal vs artificially delayed origin (300 ms) | cold 10 ms vs **643 ms**; warm stays about 3 ms |
+| Realistic Zipf workload, cold caches (1,500 requests) | 81.8% cache hit ratio, 162 origin requests, 111 collapsed |
+| Failures: edge-1 down / shield down / origin down / origin down with expired caches | **100% success in every phase**; shield-down uses 156 bypasses, expired-origin-down serves 137 stale copies |
 
 ## Tests
 
 ```bash
-docker compose up -d --build
-pip install -r requirements.txt pytest
+pip install -r requirements-dev.txt
 python -m pytest tests                                   # unit tests (collapsing, breaker, TTLs, generator)
+docker compose up -d --build
 CDN_URL=http://localhost:8000 python -m pytest tests     # plus end-to-end tests against the live stack
 ```
 
 ## API
+
+These are the router's endpoints. When `CONTROL_TOKEN` is set, every POST needs an `X-Control-Token` header.
 
 | Method | Endpoint | Description |
 |---|---|---|
@@ -190,6 +164,7 @@ CDN_URL=http://localhost:8000 python -m pytest tests     # plus end-to-end tests
 | GET | `/metrics` | Hit ratios, avg/p50/p95/p99 latency, throughput, origin requests, collapsing efficiency, per-node counters |
 | POST | `/metrics/reset` | Reset all counters |
 | GET | `/health` | Component availability |
+| GET | `/healthz` | Liveness for hosting platforms on internal services; stays 200 during a simulated failure |
 | POST | `/failure/{component}` | `{"down": true\|false}` for `edge-1..3`, `shield`, `origin`; `/failure/reset` restores everything |
 | GET/POST | `/config` | Runtime config (TTLs, collapsing, origin delay, timeouts), pushed to every node |
 | POST | `/api/publish` | Publish a breaking-news article and purge the homepage index |

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import random
 import re
 from dataclasses import asdict, dataclass, field
@@ -18,6 +19,8 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 GENERATOR_VERSION = "3"
 STATIC_DIR = Path(__file__).parent / "static"
+# JPEGs rendered at image build time, because rendering is slow on small hosted instances.
+IMAGE_CACHE_DIR = Path(os.getenv("IMAGE_CACHE_DIR", "/app/image-cache"))
 
 SECTIONS = {
     "world": (37, 99, 235),
@@ -280,6 +283,21 @@ def render_image(article: Article, width: int, height: int, quality: int = 85) -
     return out.getvalue()
 
 
+def cached_image(article: Article, width: int, height: int, quality: int = 85) -> bytes:
+    path = IMAGE_CACHE_DIR / f"{article.article_id}-{article.category}-{article.section}-{width}.jpg"
+    if path.exists():
+        return path.read_bytes()
+    return render_image(article, width, height, quality)
+
+
+def prerender_images(count: int = 60) -> None:
+    IMAGE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    for a in generate_articles(count):
+        for width, height, quality in ((1200, 675, 85), (400, 225, 80)):
+            path = IMAGE_CACHE_DIR / f"{a.article_id}-{a.category}-{a.section}-{width}.jpg"
+            path.write_bytes(render_image(a, width, height, quality))
+
+
 def build_index(articles: list[Article]) -> bytes:
     payload = {
         "paper": "The Daily Edge",
@@ -294,9 +312,9 @@ def article_objects(article: Article) -> list[SeedObject]:
     return [
         SeedObject(f"article:{article.article_id}", json.dumps(asdict(article)).encode(),
                    "application/json", article.category),
-        SeedObject(f"image:{article.article_id}", render_image(article, 1200, 675),
+        SeedObject(f"image:{article.article_id}", cached_image(article, 1200, 675),
                    "image/jpeg", "image"),
-        SeedObject(f"thumbnail:{article.article_id}", render_image(article, 400, 225, quality=80),
+        SeedObject(f"thumbnail:{article.article_id}", cached_image(article, 400, 225, 80),
                    "image/jpeg", "thumbnail"),
     ]
 

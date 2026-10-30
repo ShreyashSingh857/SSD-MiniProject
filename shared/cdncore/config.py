@@ -13,6 +13,20 @@ NODE_ID = _env("NODE_ID", "node")
 PORT = int(_env("PORT", "8000"))
 REDIS_URL = _env("REDIS_URL", "redis://localhost:6379/0")
 
+# Shared secret on every hop between services. Empty disables the check (local development).
+INTERNAL_TOKEN = _env("INTERNAL_TOKEN", "")
+# Protects the router's public POST control API (failures, flush, config, publish, benchmarks).
+CONTROL_TOKEN = _env("CONTROL_TOKEN", "")
+# Browser origins allowed to call the router, comma separated.
+WEB_ORIGINS = _env("WEB_ORIGINS", "*")
+
+# Defaults suit one local network. Hosts where services sleep need much longer values.
+CONNECT_TIMEOUT_S = float(_env("CONNECT_TIMEOUT_S", "1.5"))
+UPSTREAM_TIMEOUT_S = float(_env("UPSTREAM_TIMEOUT_S", "5"))
+HEALTH_TIMEOUT_S = float(_env("HEALTH_TIMEOUT_S", "1"))
+HEALTH_INTERVAL_S = float(_env("HEALTH_INTERVAL_S", "1"))
+ADMIN_TIMEOUT_S = float(_env("ADMIN_TIMEOUT_S", "5"))
+
 SHIELD_URL = _env("SHIELD_URL", "http://localhost:8010")
 ORIGIN_URL = _env("ORIGIN_URL", "http://localhost:8020")
 # "edge-1=http://localhost:8001,edge-2=http://localhost:8002,..."
@@ -25,6 +39,10 @@ MINIO_ENDPOINT = _env("MINIO_ENDPOINT", "localhost:9000")
 MINIO_ACCESS_KEY = _env("MINIO_ACCESS_KEY", "minioadmin")
 MINIO_SECRET_KEY = _env("MINIO_SECRET_KEY", "minioadmin")
 MINIO_BUCKET = _env("MINIO_BUCKET", "newspaper")
+MINIO_SECURE = _env("MINIO_SECURE", "false").lower() == "true"
+MINIO_CONNECT_TIMEOUT_S = float(_env("MINIO_CONNECT_TIMEOUT_S", "1"))
+MINIO_READ_TIMEOUT_S = float(_env("MINIO_READ_TIMEOUT_S", "5"))
+SEED_ARTICLES = int(_env("SEED_ARTICLES", "60"))
 
 # Size of the shield's origin fetch pool and circuit breaker settings.
 ORIGIN_POOL_SIZE = int(_env("ORIGIN_POOL_SIZE", "4"))
@@ -67,7 +85,7 @@ class RuntimeConfig:
     origin_delay_ms: int = 120
     origin_jitter_ms: int = 40
     routing_mode: str = "round-robin"
-    upstream_timeout_s: float = 5.0
+    upstream_timeout_s: float = UPSTREAM_TIMEOUT_S
 
     def ttl_for(self, content_class: str, layer: str = "edge") -> int:
         ttl = self.ttls.get(content_class, self.ttls["regular"])

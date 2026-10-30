@@ -4,11 +4,11 @@ import time
 
 import pytest
 
-from cdn import shield
-from cdn.config import RuntimeConfig, parse_edges
-from cdn.content import generator
-from cdn.metrics import Metrics, percentile
-from cdn.upstream import Fetched, UpstreamError
+import shield_app as shield
+from cdncore.config import RuntimeConfig, parse_edges
+from cdncore.metrics import Metrics, percentile
+from cdncore.upstream import Fetched, UpstreamError
+from content import generator
 
 
 def test_parse_edges():

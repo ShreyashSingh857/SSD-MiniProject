@@ -20,9 +20,10 @@ from fastapi.responses import JSONResponse, Response
 from minio import Minio
 from minio.error import S3Error
 
-from . import config
-from .content import generator
-from .node import NodeState, install_admin
+from cdncore import config
+from cdncore.node import NodeState, install_admin
+
+from content import generator
 
 log = logging.getLogger("cdn.origin")
 
@@ -32,12 +33,14 @@ SEED_MARKER = "meta/seed-version"
 state = NodeState(config.NODE_ID if config.NODE_ID != "node" else "origin", "origin")
 # Fail fast when MinIO is down instead of urllib3's default long retry/backoff.
 client = Minio(config.MINIO_ENDPOINT, access_key=config.MINIO_ACCESS_KEY,
-               secret_key=config.MINIO_SECRET_KEY, secure=False,
-               http_client=urllib3.PoolManager(timeout=urllib3.Timeout(connect=1.0, read=5.0),
+               secret_key=config.MINIO_SECRET_KEY, secure=config.MINIO_SECURE, region="us-east-1",
+               http_client=urllib3.PoolManager(timeout=urllib3.Timeout(connect=config.MINIO_CONNECT_TIMEOUT_S,
+                                                                       read=config.MINIO_READ_TIMEOUT_S),
                                                retries=urllib3.Retry(total=1, backoff_factor=0.1),
                                                maxsize=32))
 seed_info: dict = {"seeded": False, "objects": 0, "error": None}
 publish_lock = asyncio.Lock()
+seed_task: asyncio.Task | None = None
 
 
 def storage_key(object_id: str) -> str | None:
@@ -76,13 +79,17 @@ def _read_marker() -> str | None:
         return None
 
 
+def _storage_was_wiped() -> bool:
+    return _read_marker() is None
+
+
 def _seed() -> int:
     if not client.bucket_exists(config.MINIO_BUCKET):
         client.make_bucket(config.MINIO_BUCKET)
     version = generator.seed_version()
     if _read_marker() == version:
         return -1
-    _, objects = generator.generate_all()
+    _, objects = generator.generate_all(config.SEED_ARTICLES)
     for obj in objects:
         _put(obj.object_id, obj.body, obj.content_type, obj.content_class)
     marker = version.encode()
@@ -104,11 +111,19 @@ async def seed_forever() -> None:
             await asyncio.sleep(min(5, 0.5 + attempt * 0.25))
 
 
+def start_seeding() -> None:
+    global seed_task
+    if seed_task is None or seed_task.done():
+        seed_info["seeded"] = False
+        seed_task = asyncio.create_task(seed_forever())
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    task = asyncio.create_task(seed_forever())
+    start_seeding()
     yield
-    task.cancel()
+    if seed_task is not None:
+        seed_task.cancel()
 
 
 app = FastAPI(title="CDN Origin Service", lifespan=lifespan)
@@ -137,7 +152,12 @@ async def get_object(object_id: str):
     try:
         body, ctype, cls = await asyncio.to_thread(_get, key)
     except S3Error as exc:
-        if exc.code in ("NoSuchKey", "NoSuchObject"):
+        if exc.code in ("NoSuchKey", "NoSuchObject", "NoSuchBucket"):
+            # MinIO without a persistent disk loses everything on restart: detect that and reseed.
+            if await asyncio.to_thread(_storage_was_wiped):
+                state.metrics.inc("reseeds")
+                start_seeding()
+                return JSONResponse({"error": "origin storage was reset, reseeding"}, status_code=503)
             state.metrics.inc("not_found")
             return JSONResponse({"error": f"{object_id} not found"}, status_code=404)
         state.metrics.inc("storage_errors")

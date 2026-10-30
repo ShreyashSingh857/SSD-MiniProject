@@ -1,0 +1,7 @@
+fastapi>=0.115,<0.120
+uvicorn[standard]>=0.32,<0.40
+aiohttp>=3.10,<4
+redis>=5.2,<7
+minio>=7.2,<8
+pillow>=11,<13
+pytest>=8

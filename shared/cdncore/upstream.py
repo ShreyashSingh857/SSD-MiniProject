@@ -10,8 +10,7 @@ from dataclasses import dataclass
 
 import aiohttp
 
-
-CONNECT_TIMEOUT = 1.5
+from . import config
 
 
 @dataclass
@@ -36,13 +35,15 @@ class NotFound(Exception):
 
 def new_session(limit: int = 200) -> aiohttp.ClientSession:
     # Short DNS cache so a restarted container's new IP is picked up quickly.
-    return aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=limit, keepalive_timeout=30, ttl_dns_cache=2))
+    headers = {"X-Internal-Token": config.INTERNAL_TOKEN} if config.INTERNAL_TOKEN else None
+    return aiohttp.ClientSession(headers=headers,
+                                 connector=aiohttp.TCPConnector(limit=limit, keepalive_timeout=30, ttl_dns_cache=2))
 
 
 async def get_raw(session: aiohttp.ClientSession, url: str, timeout: float) -> tuple[int, dict[str, str], bytes]:
     """GET a URL; returns (status, lower-cased headers, body). Raises aiohttp/timeout errors."""
     # A short connect timeout makes a dead node (stopped container, failed DNS) fail fast.
-    client_timeout = aiohttp.ClientTimeout(total=timeout, connect=min(CONNECT_TIMEOUT, timeout))
+    client_timeout = aiohttp.ClientTimeout(total=timeout, connect=min(config.CONNECT_TIMEOUT_S, timeout))
     async with session.get(url, timeout=client_timeout) as resp:
         body = await resp.read()
         return resp.status, {k.lower(): v for k, v in resp.headers.items()}, body
@@ -61,7 +62,9 @@ async def fetch(session: aiohttp.ClientSession, url: str, timeout: float) -> Fet
     if status == 404:
         raise NotFound(url)
     if status >= 400:
-        raise UpstreamError(f"HTTP {status} from {url}", node_down=headers.get("x-node-down") == "1")
+        # 502/504 come from the hosting proxy, never from our services: the node itself is unavailable.
+        raise UpstreamError(f"HTTP {status} from {url}",
+                            node_down=headers.get("x-node-down") == "1" or status in (502, 504))
     return Fetched(
         body=body,
         content_type=headers.get("content-type", "application/octet-stream"),

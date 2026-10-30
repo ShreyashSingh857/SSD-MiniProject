@@ -2,7 +2,7 @@
 
 Runs against the router's public API, either from the dashboard ("Run benchmark") or the CLI:
 
-    python -m cdn.bench --url http://localhost:8000 --scenario all
+    PYTHONPATH=shared python services/router/bench.py --url http://localhost:8000 --scenario all
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from collections import Counter
 
 import aiohttp
 
-from .metrics import percentile
+from cdncore.metrics import percentile
 
 HIT_LAYERS = ("HIT-EDGE", "HIT-SHIELD", "STALE-EDGE", "STALE-SHIELD")
 
@@ -206,9 +206,10 @@ SCENARIOS = {
 }
 
 
-async def run(base_url: str, scenario: str = "all", **options) -> dict:
+async def run(base_url: str, scenario: str = "all", control_token: str = "", **options) -> dict:
     async with aiohttp.ClientSession(base_url=base_url, timeout=aiohttp.ClientTimeout(total=90),
-                                     connector=aiohttp.TCPConnector(limit=300)) as client:
+                                     connector=aiohttp.TCPConnector(limit=300),
+                                     headers={"X-Control-Token": control_token} if control_token else None) as client:
         ctl = Control(client)
         original = await ctl.get_json("/config")
         names = list(SCENARIOS) if scenario == "all" else [scenario]
@@ -233,9 +234,10 @@ def main() -> None:
     parser.add_argument("--requests", type=int)
     parser.add_argument("--concurrency", type=int)
     parser.add_argument("--out", help="write JSON results to this file")
+    parser.add_argument("--control-token", default="", help="the router's CONTROL_TOKEN, if it has one")
     args = parser.parse_args()
     options = {k: v for k, v in (("requests", args.requests), ("concurrency", args.concurrency)) if v}
-    results = asyncio.run(run(args.url, args.scenario, **options))
+    results = asyncio.run(run(args.url, args.scenario, args.control_token, **options))
     text = json.dumps(results, indent=2)
     if args.out:
         with open(args.out, "w") as fh:

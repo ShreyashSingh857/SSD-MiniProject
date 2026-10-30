@@ -1,0 +1,56 @@
+# Approximates Render's free plan locally: 512 MB and 0.1 CPU per service, tokens on every hop,
+# Render's timeouts, a private Redis inside each cache service and MinIO without a disk.
+#   docker compose -f docker-compose.yml -f docker-compose.render-sim.yml up --build
+
+x-render: &render
+  PORT: "10000"
+  INTERNAL_TOKEN: sim-internal-token
+  MINIO_ACCESS_KEY: cdnadmin
+  MINIO_SECRET_KEY: cdnadmin-secret
+  CONNECT_TIMEOUT_S: "15"
+  UPSTREAM_TIMEOUT_S: "90"
+  HEALTH_TIMEOUT_S: "20"
+  HEALTH_INTERVAL_S: "5"
+  ADMIN_TIMEOUT_S: "20"
+
+x-limits: &limits
+  mem_limit: 512m
+  cpus: 0.1
+
+services:
+  minio:
+    <<: *limits
+    environment: { <<: *render, MINIO_BROWSER: "off", GOMEMLIMIT: 350MiB }
+    ports: !reset []
+    volumes: !reset []
+  origin:
+    <<: *limits
+    environment:
+      <<: *render
+      NODE_ID: origin
+      MINIO_ENDPOINT: minio:10000
+      SEED_ARTICLES: "24"
+      MINIO_CONNECT_TIMEOUT_S: "15"
+      MINIO_READ_TIMEOUT_S: "75"
+  shield:
+    <<: *limits
+    environment: { <<: *render, NODE_ID: shield, ORIGIN_URL: "http://origin:10000", REDIS_URL: "" }
+  edge-1:
+    <<: *limits
+    environment: { <<: *render, NODE_ID: edge-1, SHIELD_URL: "http://shield:10000", ORIGIN_URL: "http://origin:10000", REDIS_URL: "" }
+  edge-2:
+    <<: *limits
+    environment: { <<: *render, NODE_ID: edge-2, SHIELD_URL: "http://shield:10000", ORIGIN_URL: "http://origin:10000", REDIS_URL: "" }
+  edge-3:
+    <<: *limits
+    environment: { <<: *render, NODE_ID: edge-3, SHIELD_URL: "http://shield:10000", ORIGIN_URL: "http://origin:10000", REDIS_URL: "" }
+  router:
+    <<: *limits
+    environment:
+      <<: *render
+      NODE_ID: router
+      CONTROL_TOKEN: sim-control-token
+      SHIELD_URL: http://shield:10000
+      ORIGIN_URL: http://origin:10000
+      EDGE_URLS: edge-1=http://edge-1:10000,edge-2=http://edge-2:10000,edge-3=http://edge-3:10000
+    ports: !override ["8000:10000"]

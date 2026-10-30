@@ -1,14 +1,18 @@
 """Shared plumbing for every CDN node: failure simulation, health, metrics and config endpoints."""
 from __future__ import annotations
 
-from typing import Awaitable, Callable
+import hmac
+from typing import TYPE_CHECKING, Awaitable, Callable
 
 from fastapi import Body, FastAPI
 from fastapi.responses import JSONResponse
 
-from .cache import CacheStore
+from . import config
 from .config import RuntimeConfig
 from .metrics import Metrics
+
+if TYPE_CHECKING:  # the router and origin have no Redis dependency
+    from .cache import CacheStore
 
 
 class NodeState:
@@ -29,6 +33,21 @@ def down_response(state: NodeState) -> JSONResponse:
     )
 
 
+class InternalAuth:
+    """ASGI middleware: services are publicly reachable on some hosts, so hops carry a shared secret."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and config.INTERNAL_TOKEN and scope["path"] not in ("/health", "/healthz"):
+            sent = dict(scope["headers"]).get(b"x-internal-token", b"").decode("latin-1")
+            if not hmac.compare_digest(sent, config.INTERNAL_TOKEN):
+                await JSONResponse({"error": "invalid internal token"}, status_code=401)(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
 class FailureGate:
     """ASGI middleware: a failed node refuses all traffic except the admin API used to restore it."""
 
@@ -37,7 +56,7 @@ class FailureGate:
         self.state = state
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] == "http" and self.state.failed and not scope["path"].startswith("/admin"):
+        if scope["type"] == "http" and self.state.failed and scope["path"] != "/healthz" and not scope["path"].startswith("/admin"):
             await down_response(self.state)(scope, receive, send)
             return
         await self.app(scope, receive, send)
@@ -46,6 +65,12 @@ class FailureGate:
 def install_admin(app: FastAPI, state: NodeState,
                   extra_status: Callable[[], Awaitable[dict]] | None = None) -> None:
     app.add_middleware(FailureGate, state=state)
+    app.add_middleware(InternalAuth)
+
+    @app.get("/healthz")
+    async def liveness():
+        # For the hosting platform: stays 200 during a simulated failure so the node is not restarted.
+        return {"node": state.node_id, "alive": True}
 
     @app.get("/health")
     async def health():

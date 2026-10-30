@@ -1,0 +1,183 @@
+# Render Blueprint: 7 free web services and 1 static site, connected over public HTTPS because free
+# web services cannot receive private network traffic. See docs/RENDER_DEPLOYMENT.md.
+
+envVarGroups:
+  - name: edge-cdn-shared
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: INTERNAL_TOKEN
+        generateValue: true
+      - key: MINIO_ACCESS_KEY
+        value: cdnadmin
+      - key: MINIO_SECRET_KEY
+        generateValue: true
+      - key: CONNECT_TIMEOUT_S
+        value: "15"
+      - key: UPSTREAM_TIMEOUT_S
+        value: "90"
+      - key: HEALTH_TIMEOUT_S
+        value: "20"
+      - key: HEALTH_INTERVAL_S
+        value: "5"
+      - key: ADMIN_TIMEOUT_S
+        value: "20"
+
+services:
+  - type: web
+    name: edge-cdn-minio
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./services/minio/Dockerfile
+    dockerContext: .
+    healthCheckPath: /minio/health/live
+    autoDeployTrigger: commit
+    buildFilter:
+      paths: ["services/minio/**"]
+    envVars:
+      - fromGroup: edge-cdn-shared
+      - key: MINIO_BROWSER
+        value: "off"
+      - key: GOMEMLIMIT
+        value: 350MiB
+
+  - type: web
+    name: edge-cdn-origin
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./services/origin/Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    buildFilter:
+      paths: ["services/origin/**", "shared/**"]
+    envVars:
+      - fromGroup: edge-cdn-shared
+      - key: NODE_ID
+        value: origin
+      - key: MINIO_ENDPOINT
+        sync: false
+      - key: MINIO_SECURE
+        value: "true"
+      - key: MINIO_CONNECT_TIMEOUT_S
+        value: "15"
+      - key: MINIO_READ_TIMEOUT_S
+        value: "75"
+      - key: SEED_ARTICLES
+        value: "24"
+
+  - type: web
+    name: edge-cdn-shield
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./services/shield/Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    buildFilter:
+      paths: ["services/shield/**", "shared/**"]
+    envVars:
+      - fromGroup: edge-cdn-shared
+      - key: NODE_ID
+        value: shield
+      - key: ORIGIN_URL
+        sync: false
+
+  - type: web
+    name: edge-cdn-edge-1
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./services/edge/Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    buildFilter:
+      paths: ["services/edge/**", "shared/**"]
+    envVars:
+      - fromGroup: edge-cdn-shared
+      - key: NODE_ID
+        value: edge-1
+      - key: SHIELD_URL
+        sync: false
+      - key: ORIGIN_URL
+        sync: false
+
+  - type: web
+    name: edge-cdn-edge-2
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./services/edge/Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    buildFilter:
+      paths: ["services/edge/**", "shared/**"]
+    envVars:
+      - fromGroup: edge-cdn-shared
+      - key: NODE_ID
+        value: edge-2
+      - key: SHIELD_URL
+        sync: false
+      - key: ORIGIN_URL
+        sync: false
+
+  - type: web
+    name: edge-cdn-edge-3
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./services/edge/Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    buildFilter:
+      paths: ["services/edge/**", "shared/**"]
+    envVars:
+      - fromGroup: edge-cdn-shared
+      - key: NODE_ID
+        value: edge-3
+      - key: SHIELD_URL
+        sync: false
+      - key: ORIGIN_URL
+        sync: false
+
+  - type: web
+    name: edge-cdn-router
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./services/router/Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    buildFilter:
+      paths: ["services/router/**", "shared/**"]
+    envVars:
+      - fromGroup: edge-cdn-shared
+      - key: NODE_ID
+        value: router
+      - key: CONTROL_TOKEN
+        generateValue: true
+      - key: EDGE_URLS
+        sync: false
+      - key: SHIELD_URL
+        sync: false
+      - key: ORIGIN_URL
+        sync: false
+      - key: WEB_ORIGINS
+        sync: false
+
+  - type: web
+    name: edge-cdn-web
+    runtime: static
+    rootDir: services/web
+    buildCommand: printf 'window.CDN_API = "%s";' "$CDN_API_URL" > config.js
+    staticPublishPath: .
+    envVars:
+      - key: CDN_API_URL
+        sync: false

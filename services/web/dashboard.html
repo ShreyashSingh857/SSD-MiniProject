@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CDN Control Room</title>
-<link rel="icon" href="/content/static:logo.svg" type="image/svg+xml">
+<script src="config.js"></script>
+<script>document.write('<link rel="icon" href="' + CDN_API + '/content/static:logo.svg" type="image/svg+xml">');</script>
 <style>
 :root {
   color-scheme: light;
@@ -134,7 +135,7 @@ td.num, th.num { text-align: right; }
     <div><h1>Edge CDN · Origin Shield — control room</h1>
       <div class="sub">Router → 3 edge caches (Redis) → shared origin shield (Redis + request collapsing) → MinIO origin</div></div>
     <div class="links"><span class="pill" id="overall"><span class="dot"></span>…</span>
-      <a href="/">Newspaper</a><a href="/docs">API docs</a></div>
+      <a href="index.html">Newspaper</a><a id="api-docs" href="#">API docs</a></div>
   </header>
 
   <section class="panel">
@@ -239,9 +240,24 @@ const fmt = (v, d = 0) => Number(v || 0).toLocaleString(undefined, { maximumFrac
 const history = { rps: [], p95: [] };
 let last = null;
 
+$("api-docs").href = CDN_API + "/docs";
+let controlToken = "";
+try { controlToken = sessionStorage.getItem("control-token") || ""; } catch (e) { /* storage blocked */ }
+
 async function api(path, opts = {}) {
-  const resp = await fetch(path, { headers: { "content-type": "application/json" }, ...opts,
+  const headers = { "content-type": "application/json" };
+  if (controlToken) headers["x-control-token"] = controlToken;
+  const resp = await fetch(CDN_API + path, { headers, ...opts,
     body: opts.body ? JSON.stringify(opts.body) : undefined });
+  if (resp.status === 401) {
+    const entered = window.prompt("This action needs the control token (CONTROL_TOKEN):");
+    if (entered) {
+      controlToken = entered.trim();
+      try { sessionStorage.setItem("control-token", controlToken); } catch (e) { /* storage blocked */ }
+      return api(path, opts);
+    }
+    throw new Error("control token required");
+  }
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new Error(data.error || resp.status);
   return data;
@@ -424,7 +440,7 @@ function tick() {
   const count = Math.floor(n) + (Math.random() < n % 1 ? 1 : 0);
   for (let i = 0; i < count && gen.inflight < 150; i++) {
     gen.inflight++; gen.sent++;
-    fetch(`/content/${pick()}`, { cache: "no-store" }).then((r) => { if (!r.ok) gen.failed++; return r.arrayBuffer(); })
+    fetch(`${CDN_API}/content/${pick()}`, { cache: "no-store" }).then((r) => { if (!r.ok) gen.failed++; return r.arrayBuffer(); })
       .catch(() => gen.failed++).finally(() => gen.inflight--);
   }
   $("traffic-msg").textContent = `Sending ~${$("rps").value} req/s · ${fmt(gen.sent)} sent · ${fmt(gen.failed)} failed`;
@@ -460,7 +476,7 @@ for (const layer of ["all", "edges", "shield"]) {
 $("publish").addEventListener("click", async () => {
   try {
     const r = await api("/api/publish", { method: "POST", body: {} });
-    $("news-msg").innerHTML = `Published <a href="/#/article/${esc(r.published.article_id)}">${esc(r.published.title)}</a>`;
+    $("news-msg").innerHTML = `Published <a href="index.html#/article/${esc(r.published.article_id)}">${esc(r.published.title)}</a>`;
     if (gen.on) loadObjects();
   } catch (e) { $("news-msg").textContent = "Publish failed: " + e.message; }
 });
