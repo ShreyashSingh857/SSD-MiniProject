@@ -272,6 +272,12 @@ async def reset_metrics():
     return {"reset": await all_nodes("POST", "/admin/metrics/reset")}
 
 
+@app.get("/healthz")
+async def liveness():
+    # For the hosting platform: the router is alive even while the nodes behind it are down.
+    return {"node": "router", "alive": True}
+
+
 @app.get("/health")
 async def get_health():
     components = {name: {"up": h["up"], "latency_ms": h["latency_ms"]} for name, h in health.items()}
