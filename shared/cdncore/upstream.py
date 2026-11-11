@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import aiohttp
 
 from . import config
+from .reqlog import request_id
 
 
 @dataclass
@@ -44,7 +45,10 @@ async def get_raw(session: aiohttp.ClientSession, url: str, timeout: float) -> t
     """GET a URL; returns (status, lower-cased headers, body). Raises aiohttp/timeout errors."""
     # A short connect timeout makes a dead node (stopped container, failed DNS) fail fast.
     client_timeout = aiohttp.ClientTimeout(total=timeout, connect=min(config.CONNECT_TIMEOUT_S, timeout))
-    async with session.get(url, timeout=client_timeout) as resp:
+    # Pass the current request's ID on, so the next layer logs it too.
+    rid = request_id.get()
+    headers = {"X-Request-Id": rid} if rid else None
+    async with session.get(url, timeout=client_timeout, headers=headers) as resp:
         body = await resp.read()
         return resp.status, {k.lower(): v for k, v in resp.headers.items()}, body
 

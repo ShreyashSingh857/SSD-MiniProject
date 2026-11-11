@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from . import config
 from .config import RuntimeConfig
 from .metrics import Metrics
+from .reqlog import RequestLog
 
 if TYPE_CHECKING:  # the router and origin have no Redis dependency
     from .cache import CacheStore
@@ -66,6 +67,8 @@ def install_admin(app: FastAPI, state: NodeState,
                   extra_status: Callable[[], Awaitable[dict]] | None = None) -> None:
     app.add_middleware(FailureGate, state=state)
     app.add_middleware(InternalAuth)
+    # Added last so it is outermost: rejected (401) and simulated-down (503) requests are logged too.
+    app.add_middleware(RequestLog, node_id=state.node_id)
 
     @app.get("/healthz")
     async def liveness():

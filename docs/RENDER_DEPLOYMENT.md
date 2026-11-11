@@ -217,6 +217,7 @@ Choose **New → Static Site**, then:
 | `UPSTREAM_TIMEOUT_S` | router, edges, shield | `5` | Timeout for content requests |
 | `HEALTH_TIMEOUT_S`, `HEALTH_INTERVAL_S` | router | `1`, `1` | Health checking |
 | `ADMIN_TIMEOUT_S` | router | `5` | Metrics and control calls |
+| `REQUEST_LOG` | all except minio | `true` | One log line per request; `false` turns it off |
 | `ORIGIN_POOL_SIZE` | shield | `4` | Parallel origin fetches |
 | `BREAKER_FAILURE_THRESHOLD`, `BREAKER_RESET_SECONDS` | shield | `5`, `10` | Circuit breaker |
 | `CDN_API_URL` | static site, at build | none | Router URL, written to `config.js` |
@@ -237,6 +238,24 @@ while services wake. Then:
 3. Press **Start traffic**. The hit ratio should climb.
 4. Press **Fail** on an edge and enter the control token when asked. Traffic should keep flowing.
 5. Press **Restore all components**.
+
+### Following a request through the logs
+
+Every service writes one line per request to its **Logs** tab in Render. The router gives each
+reader request an ID, and every hop passes it on, so one click shows up in each service it reached:
+
+```
+[router] req=b3efe7c86b GET /content/article:world-001 -> 200 MISS-ORIGIN via=edge-2 412.3ms 6.1KB
+[edge-2] req=b3efe7c86b GET /content/article:world-001 -> 200 MISS-ORIGIN 408.9ms 6.1KB
+[shield] req=b3efe7c86b GET /object/article:world-001 -> 200 MISS 402.1ms 6.1KB
+[origin] req=b3efe7c86b GET /object/article:world-001 -> 200 source=MinIO 391.7ms 6.1KB
+```
+
+Load the same article again and the chain stops early: only the router and an edge log it
+(`HIT-EDGE`), or the router, an edge and the shield (`HIT-SHIELD`). To follow one request, copy its
+ID from the dashboard's request log or from the `X-Request-Id` response header, and paste it into
+the search box of each service's logs. Health checks and dashboard polling are not logged. Control
+actions (POST) are.
 
 ## 8. Free-plan limits
 

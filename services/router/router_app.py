@@ -10,7 +10,6 @@ import asyncio
 import hmac
 import itertools
 import time
-import uuid
 from collections import deque
 from contextlib import asynccontextmanager
 from urllib.parse import quote
@@ -21,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
 import bench
-from cdncore import config
+from cdncore import config, reqlog
 from cdncore.config import RuntimeConfig
 from cdncore.metrics import Metrics
 from cdncore.upstream import get_raw, new_session
@@ -76,8 +75,8 @@ app = FastAPI(title="Edge CDN with Origin Shielding", lifespan=lifespan)
 class ControlAuth:
     """ASGI middleware: POST requests change system state, so they need CONTROL_TOKEN when it is set."""
 
-    def __init__(self, inner):
-        self.inner = inner
+    def __init__(self, app):
+        self.app = app
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http" and scope["method"] == "POST" and config.CONTROL_TOKEN:
@@ -85,7 +84,7 @@ class ControlAuth:
             if not hmac.compare_digest(sent, config.CONTROL_TOKEN):
                 await JSONResponse({"error": "control token required"}, status_code=401)(scope, receive, send)
                 return
-        await self.inner(scope, receive, send)
+        await self.app(scope, receive, send)
 
 
 app.add_middleware(ControlAuth)
@@ -96,6 +95,8 @@ app.add_middleware(
     allow_headers=["content-type", "x-control-token"],
     expose_headers=["x-cache", "x-served-by", "x-content-class", "x-latency-ms", "x-request-id", "x-edge-attempts"],
 )
+# Outermost: logs every request, and starts the request ID that the edges, shield and origin log too.
+app.add_middleware(reqlog.RequestLog, node_id="router", trust_incoming=False)
 
 
 def edge_order() -> list[str]:
@@ -114,7 +115,7 @@ def mark_down(edge: str) -> None:
 
 async def route(object_id: str) -> Response:
     started = time.perf_counter()
-    request_id = uuid.uuid4().hex[:10]
+    request_id = reqlog.request_id.get() or reqlog.new_id()
     resp = None
     attempts = 0
     for edge in edge_order():

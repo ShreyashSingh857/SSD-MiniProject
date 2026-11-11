@@ -17,6 +17,8 @@ REDIS_URL = _env("REDIS_URL", "redis://localhost:6379/0")
 INTERNAL_TOKEN = _env("INTERNAL_TOKEN", "")
 # Protects the router's public POST control API (failures, flush, config, publish, benchmarks).
 CONTROL_TOKEN = _env("CONTROL_TOKEN", "")
+# One log line per request on every service (see cdncore/reqlog.py). "false" turns it off.
+REQUEST_LOG = _env("REQUEST_LOG", "true").lower() in ("1", "true", "yes", "on")
 # Browser origins allowed to call the router, comma separated.
 WEB_ORIGINS = _env("WEB_ORIGINS", "*")
 
