@@ -436,6 +436,7 @@ function pick() {
   return gen.objects[0];
 }
 function tick() {
+  if (!gen.on) { clearInterval(gen.timer); gen.timer = null; return; }
   const n = Number($("rps").value) / 10;
   const count = Math.floor(n) + (Math.random() < n % 1 ? 1 : 0);
   for (let i = 0; i < count && gen.inflight < 150; i++) {
@@ -446,8 +447,13 @@ function tick() {
   $("traffic-msg").textContent = `Sending ~${$("rps").value} req/s · ${fmt(gen.sent)} sent · ${fmt(gen.failed)} failed`;
 }
 $("traffic").addEventListener("click", async () => {
-  if (gen.on) { clearInterval(gen.timer); gen.on = false; $("traffic").textContent = "Start traffic"; $("traffic-msg").textContent = "Stopped."; return; }
-  try { await loadObjects(); } catch (e) { $("traffic-msg").textContent = "Could not load the article list: " + e.message; return; }
+  if (gen.starting) return;
+  if (gen.on) { gen.on = false; clearInterval(gen.timer); gen.timer = null; $("traffic").textContent = "Start traffic"; $("traffic-msg").textContent = "Stopped."; return; }
+  gen.starting = true; $("traffic").disabled = true; $("traffic-msg").textContent = "Loading article list…";
+  try { await loadObjects(); }
+  catch (e) { $("traffic-msg").textContent = "Could not load the article list: " + e.message; return; }
+  finally { gen.starting = false; $("traffic").disabled = false; }
+  clearInterval(gen.timer);
   gen.on = true; $("traffic").textContent = "Stop traffic"; gen.timer = setInterval(tick, 100);
 });
 $("rps").addEventListener("input", () => { $("rps-val").textContent = $("rps").value; });
