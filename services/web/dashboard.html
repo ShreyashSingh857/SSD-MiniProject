@@ -70,6 +70,9 @@ button.primary { background: var(--btn); color: var(--btn-ink); border-color: va
 button.danger { color: var(--critical); }
 button:disabled { opacity: .5; cursor: not-allowed; }
 .node button { width: 100%; }
+button.copy-key { padding: 2px 6px; margin-right: 5px; font-size: 10px; vertical-align: middle; }
+.cache-key { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.copy-group { display: inline-flex; align-items: center; margin: 2px 8px 2px 0; }
 
 /* KPI tiles */
 .tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
@@ -300,17 +303,18 @@ $("api-docs").href = CDN_API + "/docs";
 let controlToken = "";
 try { controlToken = sessionStorage.getItem("control-token") || ""; } catch (e) { /* storage blocked */ }
 
-async function api(path, opts = {}) {
+async function api(path, opts = {}, retryAuth = true) {
   const headers = { "content-type": "application/json" };
   if (controlToken) headers["x-control-token"] = controlToken;
   const resp = await fetch(CDN_API + path, { headers, ...opts,
     body: opts.body ? JSON.stringify(opts.body) : undefined });
   if (resp.status === 401) {
+    if (!retryAuth) throw new Error("Control token was rejected");
     const entered = window.prompt("This action needs the control token (CONTROL_TOKEN):");
     if (entered) {
       controlToken = entered.trim();
       try { sessionStorage.setItem("control-token", controlToken); } catch (e) { /* storage blocked */ }
-      return api(path, opts);
+      return api(path, opts, false);
     }
     throw new Error("control token required");
   }
@@ -456,7 +460,7 @@ async function refresh() {
     $("overall").innerHTML = `<span class="dot" style="background:var(--critical)"></span>Router unreachable`;
   }
 }
-async function refreshSlow() {
+async function refreshSlow({ reportErrors = false } = {}) {
   try {
     const reqs = await api("/api/requests?limit=60");
     $("reqs").innerHTML = reqs.map((r) => `<tr><td>${esc(r.request_id)}</td><td>${esc(r.object_id)}</td><td>${esc(r.edge_id)}</td>
@@ -477,7 +481,14 @@ async function refreshSlow() {
       `<td class="num">${fmt(Math.max(0, obj.expires_in ?? 0), 1)}</td><td>${obj.fresh ? "Fresh" : "Stale (logical TTL expired; grace period)"}</td></tr>`));
     $("ttl-samples").innerHTML = ttlRows.join("") || `<tr><td colspan="5">No cached objects yet. Send traffic to populate the caches.</td></tr>`;
     const inventory = await api("/cache/objects");
-    $("cache-inventory").innerHTML = inventory.objects.map((o) => `<tr><td>${esc(o.node)}</td><td>${esc(o.object_id)}</td><td>${esc((o.surrogate_keys || []).join(" "))}</td><td>${o.max_age ?? "–"}s</td><td>${fmt(o.remaining_ttl, 1)}s</td><td>${esc(o.status)}</td></tr>`).join("") || `<tr><td colspan="6">No cached objects. Request content to populate Edge and Shield.</td></tr>`;
+    $("cache-inventory").innerHTML = inventory.objects.map((o) => {
+      const objectId = esc(o.object_id);
+      const surrogateKeys = (o.surrogate_keys || []).map((key) => {
+        const safeKey = esc(key);
+        return `<span class="copy-group"><button type="button" class="copy-key" data-copy-value="${safeKey}" aria-label="Copy surrogate key ${safeKey}">Copy</button><code class="cache-key">${safeKey}</code></span>`;
+      }).join("") || "–";
+      return `<tr><td>${esc(o.node)}</td><td><button type="button" class="copy-key" data-copy-value="${objectId}" aria-label="Copy object key ${objectId}">Copy</button><code class="cache-key">${objectId}</code></td><td>${surrogateKeys}</td><td>${o.max_age ?? "–"}s</td><td>${fmt(o.remaining_ttl, 1)}s</td><td>${esc(o.status)}</td></tr>`;
+    }).join("") || `<tr><td colspan="6">No cached objects. Request content to populate Edge and Shield.</td></tr>`;
     const propagation = window.lastInvalidation;
     if (propagation) renderInvalidation(propagation);
     const events = await api("/api/invalidation/events?limit=10");
@@ -489,22 +500,74 @@ async function refreshSlow() {
     if (events.length && (!window.lastInvalidation || window.lastInvalidation.event_id !== events[0].event_id)) {
       window.lastInvalidation = events[0]; renderInvalidation(events[0]);
     }
-  } catch (e) { /* router restarting */ }
+  } catch (e) {
+    if (reportErrors) throw e;
+  }
 }
+
+async function copyToClipboard(value) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const field = document.createElement("textarea");
+  field.value = value;
+  field.setAttribute("readonly", "");
+  field.style.position = "fixed";
+  field.style.opacity = "0";
+  document.body.appendChild(field);
+  field.select();
+  const copied = document.execCommand("copy");
+  field.remove();
+  if (!copied) throw new Error("Clipboard access is unavailable in this browser");
+}
+
+$("cache-inventory").addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-copy-value]");
+  if (!button) return;
+  const originalText = button.textContent;
+  button.disabled = true;
+  try {
+    await copyToClipboard(button.dataset.copyValue);
+    button.textContent = "Copied";
+    setTimeout(() => { if (button.isConnected) button.textContent = originalText; }, 1200);
+  } catch (error) {
+    $("purge-result").textContent = `Copy failed: ${error.message}`;
+  } finally {
+    button.disabled = false;
+  }
+});
 
 async function runManualPurge(kind) {
   const key = kind === "object_id" ? $("purge-object").value.trim() : $("purge-surrogate").value.trim();
   if (!key) { $("purge-result").textContent = `Enter a ${kind === "object_id" ? "object ID" : "surrogate key"}.`; return; }
+  const button = kind === "object_id" ? $("purge-by-object") : $("purge-by-surrogate");
+  button.disabled = true;
+  button.textContent = "Purging…";
   try {
     const response = await api("/cache/flush", { method: "POST", body: { layer: $("purge-layer").value, [kind]: key } });
-    window.lastInvalidation = { deleted: response.objects_invalidated, propagation_latency_ms: response.propagation_latency_ms, purged: response.result };
+    window.lastInvalidation = { event_name: `${response.purge_type} purge`, deleted: `${key} (${response.objects_invalidated} objects)`,
+      source: "dashboard", propagation_latency_ms: response.propagation_latency_ms, purged: response.result };
     $("purge-result").textContent = JSON.stringify(response, null, 2);
     refreshSlow();
   } catch (error) { $("purge-result").textContent = `Purge failed: ${error.message}`; }
+  finally {
+    button.disabled = false;
+    button.textContent = kind === "object_id" ? "Purge object ID" : "Purge surrogate key";
+  }
 }
 $("purge-by-object").addEventListener("click", () => runManualPurge("object_id"));
 $("purge-by-surrogate").addEventListener("click", () => runManualPurge("surrogate_key"));
-$("inventory-refresh").addEventListener("click", refreshSlow);
+$("inventory-refresh").addEventListener("click", async () => {
+  const button = $("inventory-refresh");
+  button.disabled = true;
+  try {
+    await refreshSlow({ reportErrors: true });
+    $("purge-result").textContent = "Cache inventory refreshed.";
+  } catch (error) {
+    $("purge-result").textContent = `Inventory refresh failed: ${error.message}`;
+  } finally { button.disabled = false; }
+});
 
 function renderInvalidation(result) {
   const perNode = result.purged || {};
@@ -771,18 +834,29 @@ $("demo-reset").addEventListener("click", async () => {
   } finally { $("demo-reset").disabled = false; }
 });
 $("apply").addEventListener("click", async () => {
+  const button = $("apply");
+  button.disabled = true;
+  $("config-msg").textContent = "Applying settings to every cache node…";
   try {
     await api("/config", { method: "POST", body: { collapsing: $("collapsing").value === "true", origin_delay_ms: Number($("delay").value),
       ttls: { breaking: Number($("ttl-breaking").value), image: Number($("ttl-image").value), thumbnail: Number($("ttl-image").value) } } });
     appliedCollapsing = $("collapsing").value === "true";
     $("config-msg").textContent = "Applied to all nodes.";
-  } catch (e) { $("config-msg").textContent = "Failed: " + e.message; }
+  } catch (e) { $("config-msg").textContent = "Apply failed: " + e.message; }
+  finally { button.disabled = false; }
 });
 for (const layer of ["all", "edges", "shield"]) {
-  $(`flush-${layer}`).addEventListener("click", async () => {
-    const r = await api("/cache/flush", { method: "POST", body: { layer } });
-    const n = Object.values(r.result).reduce((a, b) => a + (b.flushed || 0), 0);
-    $("config-msg").textContent = `Flushed ${n} objects from ${layer}.`; refreshSlow();
+  const button = $(`flush-${layer}`);
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    $("config-msg").textContent = `Flushing ${layer}…`;
+    try {
+      const r = await api("/cache/flush", { method: "POST", body: { layer } });
+      const count = r.objects_invalidated ?? Object.values(r.result || {}).reduce((a, b) => a + (b.flushed || 0), 0);
+      $("config-msg").textContent = `Flushed ${count} objects from ${layer}.`;
+      await refreshSlow();
+    } catch (error) { $("config-msg").textContent = `Flush failed: ${error.message}`; }
+    finally { button.disabled = false; }
   });
 }
 $("publish").addEventListener("click", async () => {
@@ -813,8 +887,27 @@ $("delete-object-btn").addEventListener("click", async () => {
   } catch (e) { $("news-msg").textContent = "Delete failed: " + e.message; }
   finally { button.disabled = false; button.textContent = "Delete from MinIO via dashboard"; }
 });
-$("restore").addEventListener("click", async () => { await api("/failure/reset", { method: "POST", body: {} }); $("news-msg").textContent = "Simulated failures cleared; MinIO content was not changed."; refresh(); });
-$("reset").addEventListener("click", async () => { await api("/metrics/reset", { method: "POST" }); history.rps = []; history.p95 = []; gen.sent = gen.failed = 0; refresh(); refreshSlow(); });
+$("restore").addEventListener("click", async () => {
+  const button = $("restore");
+  button.disabled = true;
+  try {
+    await api("/failure/reset", { method: "POST", body: {} });
+    $("news-msg").textContent = "Simulated failures cleared; MinIO content was not changed.";
+    refresh();
+  } catch (error) { $("news-msg").textContent = `Restore failed: ${error.message}`; }
+  finally { button.disabled = false; }
+});
+$("reset").addEventListener("click", async () => {
+  const button = $("reset");
+  button.disabled = true;
+  try {
+    await api("/metrics/reset", { method: "POST" });
+    history.rps = []; history.p95 = []; gen.sent = gen.failed = 0;
+    $("news-msg").textContent = "Metrics reset.";
+    refresh(); refreshSlow();
+  } catch (error) { $("news-msg").textContent = `Metrics reset failed: ${error.message}`; }
+  finally { button.disabled = false; }
+});
 
 /* ---------- benchmarks */
 const LABELS = {
@@ -852,23 +945,31 @@ function renderBench(results) {
 }
 let benchTimer = null;
 async function pollBench() {
-  const b = await api("/api/benchmark");
-  if (b.running) {
-    $("bench-msg").textContent = `Running “${b.scenario}” for ${Math.round(Date.now() / 1000 - b.started_at)} s…`;
-    $("run-bench").disabled = true;
-    if (!benchTimer) benchTimer = setInterval(pollBench, 1500);
-  } else {
+  try {
+    const b = await api("/api/benchmark");
+    if (b.running) {
+      $("bench-msg").textContent = `Running “${b.scenario}” for ${Math.round(Date.now() / 1000 - b.started_at)} s…`;
+      $("run-bench").disabled = true;
+      if (!benchTimer) benchTimer = setInterval(pollBench, 1500);
+    } else {
+      $("run-bench").disabled = false;
+      $("bench-msg").textContent = b.error ? "Benchmark failed: " + b.error : Object.keys(b.results).length ? "Latest results:" : "No benchmark run yet.";
+      clearInterval(benchTimer); benchTimer = null;
+    }
+    renderBench(b.results || {});
+  } catch (error) {
     $("run-bench").disabled = false;
-    $("bench-msg").textContent = b.error ? "Benchmark failed: " + b.error : Object.keys(b.results).length ? "Latest results:" : "No benchmark run yet.";
+    $("bench-msg").textContent = `Could not read benchmark status: ${error.message}`;
     clearInterval(benchTimer); benchTimer = null;
   }
-  renderBench(b.results);
 }
 $("run-bench").addEventListener("click", async () => {
+  const button = $("run-bench");
+  button.disabled = true;
   try { await api("/api/benchmark", { method: "POST", body: { scenario: $("scenario").value } }); }
-  catch (e) { $("bench-msg").textContent = e.message; return; }
+  catch (e) { $("bench-msg").textContent = `Benchmark failed to start: ${e.message}`; button.disabled = false; return; }
   if (!benchTimer) benchTimer = setInterval(pollBench, 1500);
-  pollBench();
+  await pollBench();
 });
 
 refresh(); refreshSlow(); loadConfig().catch(() => {}); pollBench().catch(() => {});
