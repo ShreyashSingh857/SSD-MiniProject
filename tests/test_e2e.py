@@ -72,6 +72,29 @@ def test_publish_purges_index():
     assert json.loads(after)["articles"][0]["article_id"] == new_id
 
 
+def test_cache_lifetime_headers():
+    status, headers, _ = call("/content/static:homepage.css")
+    assert status == 200
+    assert int(headers["x-max-age"]) > 0
+    assert 0 <= int(headers["x-cache-ttl"]) <= int(headers["x-max-age"])
+
+
+def test_minio_delete_invalidates_every_cache_node():
+    status, _, body = call("/api/publish", "POST", {})
+    assert status == 200
+    article_id = json.loads(body)["published"]["article_id"]
+    object_id = f"article:{article_id}"
+    assert call(f"/content/{object_id}")[0] == 200  # warm edge and shield
+
+    status, _, body = call(f"/api/delete/{object_id}", "POST", {})
+    result = json.loads(body)
+    assert status == 200
+    assert set(result["purged"]) == {"edge-1", "edge-2", "edge-3", "shield"}
+    assert result["propagation_latency_ms"] >= 0
+    assert all("propagation_latency_ms" in node for node in result["purged"].values())
+    assert call(f"/content/{object_id}")[0] == 404
+
+
 def test_metrics_and_health_shape():
     call("/article/world-013")
     status, _, body = call("/metrics")

@@ -41,12 +41,14 @@ app = FastAPI(title="CDN Edge Cache", lifespan=lifespan)
 install_admin(app, state)
 
 
-def respond(body: bytes, content_type: str, content_class: str, layer: str, age: int = 0) -> Response:
+def respond(body: bytes, content_type: str, content_class: str, layer: str, age: int = 0,
+            max_age: int = 0, remaining_ttl: int = 0) -> Response:
     return Response(body, media_type=content_type, headers={
         "X-Cache": layer,
         "X-Served-By": state.node_id,
         "X-Content-Class": content_class,
         "Age": str(age),
+        "X-Max-Age": str(max_age), "X-Cache-TTL": str(remaining_ttl),
         # Keep browsers from caching so every page view exercises the CDN layers in the demo.
         "Cache-Control": "no-store",
     })
@@ -96,7 +98,8 @@ async def get_content(object_id: str):
     try:
         if cached is not None and cached.fresh:
             state.metrics.inc("hits")
-            return respond(cached.body, cached.content_type, cached.content_class, "HIT-EDGE", cached.age)
+            return respond(cached.body, cached.content_type, cached.content_class, "HIT-EDGE", cached.age,
+                           cached.max_age, cached.remaining_ttl)
         state.metrics.inc("misses")
         if cached is not None:
             state.metrics.inc("expired")
@@ -108,7 +111,10 @@ async def get_content(object_id: str):
         if fetched is None:
             if cached is not None:
                 state.metrics.inc("stale_served")
-                return respond(cached.body, cached.content_type, cached.content_class, "STALE-EDGE", cached.age)
+                stale_for = max(0.0, time.time() - cached.expires_at)
+                state.metrics.observe_stale(stale_for * 1000)
+                return respond(cached.body, cached.content_type, cached.content_class, "STALE-EDGE", cached.age,
+                               cached.max_age, 0)
             state.metrics.inc("errors")
             return JSONResponse({"error": f"content unavailable: {layer}"}, status_code=503,
                                 headers={"X-Served-By": state.node_id, "X-Cache": "ERROR"})
@@ -119,6 +125,7 @@ async def get_content(object_id: str):
                                   ttl, state.config.stale_grace_seconds)
         except Exception:
             state.metrics.inc("cache_errors")
-        return respond(fetched.body, fetched.content_type, fetched.content_class, layer)
+        return respond(fetched.body, fetched.content_type, fetched.content_class, layer,
+                       max_age=ttl, remaining_ttl=ttl)
     finally:
         state.metrics.observe((time.perf_counter() - started) * 1000)

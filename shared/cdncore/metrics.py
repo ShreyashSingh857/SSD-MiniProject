@@ -33,6 +33,12 @@ class Metrics:
     def observe(self, latency_ms: float) -> None:
         self.samples.append((time.time(), latency_ms))
 
+    def observe_stale(self, duration_ms: float) -> None:
+        value = max(0, int(duration_ms))
+        self.inc("stale_duration_count")
+        self.inc("stale_duration_ms_total", value)
+        self.counters["stale_duration_ms_max"] = max(self.counters["stale_duration_ms_max"], value)
+
     def snapshot(self) -> dict:
         now = time.time()
         latencies = [ms for _, ms in self.samples]

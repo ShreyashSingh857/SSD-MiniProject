@@ -27,7 +27,8 @@ from cdncore.upstream import get_raw, new_session
 
 EDGES = config.parse_edges()
 NODES = {**EDGES, "shield": config.SHIELD_URL.rstrip("/"), "origin": config.ORIGIN_URL.rstrip("/")}
-PASS_HEADERS = ("content-type", "x-cache", "x-served-by", "x-content-class", "age", "cache-control")
+PASS_HEADERS = ("content-type", "x-cache", "x-served-by", "x-content-class", "age", "cache-control",
+                "x-max-age", "x-cache-ttl")
 
 health: dict[str, dict] = {name: {"up": True, "checked_at": None, "latency_ms": None} for name in NODES}
 rr = itertools.count()
@@ -163,6 +164,7 @@ async def route(object_id: str) -> Response:
         "request_id": request_id, "object_id": object_id, "edge_id": resp_headers.get("x-served-by"),
         "cache_layer": layer, "status": status, "latency_ms": round(latency, 2),
         "attempts": attempts, "ts": time.time(),
+        "max_age": resp_headers.get("x-max-age"), "remaining_ttl": resp_headers.get("x-cache-ttl"),
     })
     headers = {k: v for k, v in resp_headers.items() if k in PASS_HEADERS}
     headers.update({"X-Request-Id": request_id, "X-Latency-ms": f"{latency:.1f}",
@@ -212,7 +214,12 @@ async def node_call(name: str, method: str, path: str, payload: dict | None = No
 async def all_nodes(method: str, path: str, payload: dict | None = None,
                     names: list[str] | None = None) -> dict[str, dict]:
     names = names or list(NODES)
-    results = await asyncio.gather(*(node_call(n, method, path, payload) for n in names))
+    async def timed_call(name: str) -> dict:
+        started = time.perf_counter()
+        result = await node_call(name, method, path, payload)
+        result["propagation_latency_ms"] = round((time.perf_counter() - started) * 1000, 2)
+        return result
+    results = await asyncio.gather(*(timed_call(n) for n in names))
     return dict(zip(names, results))
 
 
@@ -231,6 +238,10 @@ def summarize(router_snap: dict, nodes: dict[str, dict]) -> dict:
     origin = nodes.get("origin", {}).get("counters", {})
     collapsed = shield.get("collapsed", 0)
     shield_fetches = shield.get("origin_fetches", 0)
+    stale_nodes = [n.get("counters", {}) for n in nodes.values()]
+    stale_count = sum(x.get("stale_duration_count", 0) for x in stale_nodes)
+    stale_ms = sum(x.get("stale_duration_ms_total", 0) for x in stale_nodes)
+    stale_max = max((x.get("stale_duration_ms_max", 0) for x in stale_nodes), default=0)
     edge_misses = total - edge_hits
     return {
         "total_requests": total,
@@ -251,6 +262,8 @@ def summarize(router_snap: dict, nodes: dict[str, dict]) -> dict:
         "shield_bypasses": sum(n.get("counters", {}).get("shield_bypass", 0)
                                for name, n in nodes.items() if name in EDGES),
         "stale_served": stale,
+        "stale_duration_avg_ms": round(stale_ms / stale_count, 1) if stale_count else 0,
+        "stale_duration_max_ms": stale_max,
         "failovers": c.get("failovers", 0),
         "errors": c.get("errors", 0),
     }
@@ -353,6 +366,19 @@ async def publish(payload: dict = Body(default={})):
         return JSONResponse(result, status_code=503)
     purge = await all_nodes("POST", "/admin/flush", {"object_id": "index:latest"}, list(EDGES) + ["shield"])
     return {**result, "purged": purge}
+
+
+@app.post("/api/delete/{object_id}")
+async def delete_content(object_id: str):
+    """Delete an object from MinIO and invalidate it across all cache nodes."""
+    deleted = await node_call("origin", "POST", f"/admin/delete/{quote(object_id, safe=':')}")
+    if "error" in deleted:
+        return JSONResponse(deleted, status_code=503)
+    started = time.perf_counter()
+    purged = await all_nodes("POST", "/admin/flush", {"object_id": object_id}, list(EDGES) + ["shield"])
+    elapsed = round((time.perf_counter() - started) * 1000, 2)
+    metrics.inc("cache_invalidations")
+    return {**deleted, "purged": purged, "propagation_latency_ms": elapsed}
 
 
 # ---------------------------------------------------------------- benchmarks

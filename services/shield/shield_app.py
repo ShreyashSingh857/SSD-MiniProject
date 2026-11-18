@@ -145,10 +145,12 @@ async def collapsed_fetch(object_id: str) -> tuple[Fetched, bool]:
         inflight.pop(object_id, None)
 
 
-def respond(body: bytes, content_type: str, content_class: str, status: str, age: int = 0) -> Response:
+def respond(body: bytes, content_type: str, content_class: str, status: str, age: int = 0,
+            max_age: int = 0, remaining_ttl: int = 0) -> Response:
     return Response(body, media_type=content_type, headers={
         "X-Cache-Shield": status, "X-Content-Class": content_class,
         "X-Served-By": state.node_id, "Age": str(age),
+        "X-Max-Age": str(max_age), "X-Cache-TTL": str(remaining_ttl),
     })
 
 
@@ -164,7 +166,8 @@ async def get_object(object_id: str):
     try:
         if cached is not None and cached.fresh:
             state.metrics.inc("hits")
-            return respond(cached.body, cached.content_type, cached.content_class, "HIT", cached.age)
+            return respond(cached.body, cached.content_type, cached.content_class, "HIT", cached.age,
+                           cached.max_age, cached.remaining_ttl)
         state.metrics.inc("misses")
         try:
             fetched, was_collapsed = await collapsed_fetch(object_id)
@@ -173,10 +176,14 @@ async def get_object(object_id: str):
         except (UpstreamError, CircuitOpen) as exc:
             if cached is not None:
                 state.metrics.inc("stale_served")
-                return respond(cached.body, cached.content_type, cached.content_class, "STALE", cached.age)
+                stale_for = max(0.0, time.time() - cached.expires_at)
+                state.metrics.observe_stale(stale_for * 1000)
+                return respond(cached.body, cached.content_type, cached.content_class, "STALE", cached.age,
+                               cached.max_age, 0)
             state.metrics.inc("errors")
             return JSONResponse({"error": f"origin unavailable: {exc}"}, status_code=503)
+        ttl = state.config.ttl_for(fetched.content_class, "shield")
         return respond(fetched.body, fetched.content_type, fetched.content_class,
-                       "COLLAPSED" if was_collapsed else "MISS")
+                       "COLLAPSED" if was_collapsed else "MISS", max_age=ttl, remaining_ttl=ttl)
     finally:
         state.metrics.observe((time.perf_counter() - started) * 1000)

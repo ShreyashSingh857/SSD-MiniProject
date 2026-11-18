@@ -206,3 +206,17 @@ async def publish(payload: dict | None = None):
             return JSONResponse({"error": f"storage unavailable: {exc.__class__.__name__}"}, status_code=503)
         state.metrics.inc("published")
         return {"published": article.card(), "objects": [o.object_id for o in objects] + ["index:latest"]}
+
+
+@app.post("/admin/delete/{object_id}")
+async def delete_object(object_id: str):
+    """Delete one valid object from MinIO; the router propagates the resulting cache purge."""
+    key = storage_key(object_id)
+    if key is None:
+        return JSONResponse({"error": f"unknown object id {object_id!r}"}, status_code=400)
+    try:
+        await asyncio.to_thread(client.remove_object, config.MINIO_BUCKET, key)
+    except Exception as exc:
+        return JSONResponse({"error": f"storage unavailable: {exc.__class__.__name__}"}, status_code=503)
+    state.metrics.inc("deleted_objects")
+    return {"deleted": object_id}

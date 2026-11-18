@@ -27,6 +27,14 @@ class CachedObject:
     def age(self) -> int:
         return int(time.time() - self.created_at)
 
+    @property
+    def max_age(self) -> int:
+        return max(0, int(self.expires_at - self.created_at))
+
+    @property
+    def remaining_ttl(self) -> int:
+        return max(0, int(self.expires_at - time.time()))
+
 
 class CacheStore:
     def __init__(self, redis_url: str, layer: str):
@@ -87,6 +95,7 @@ class CacheStore:
                 sample.append({
                     "object_id": key.decode()[len(KEY_PREFIX):],
                     "fresh": is_fresh,
+                    "max_age": round(float(expires) - float(await self.redis.hget(key, "created"))) if expires else None,
                     "expires_in": round(float(expires) - now, 1) if expires else None,
                 })
         return {
