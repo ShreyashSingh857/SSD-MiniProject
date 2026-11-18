@@ -138,7 +138,9 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"
 
 | Key | Value |
 |---|---|
-| `MINIO_BROWSER` | `off` |
+| `MINIO_BROWSER` | `on` |
+| `MINIO_CONSOLE_PROXY` | `on` (routes the console through the service's public port) |
+| `MINIO_BROWSER_REDIRECT_URL` | `https://edge-cdn-minio.onrender.com/console` |
 | `GOMEMLIMIT` | `350MiB` |
 
 **`edge-cdn-origin`**
@@ -210,7 +212,7 @@ Choose **New → Static Site**, then:
 | `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY` | origin, minio | `minioadmin` on origin | MinIO credentials |
 | `MINIO_BUCKET` | origin | `newspaper` | Bucket name |
 | `MINIO_CONNECT_TIMEOUT_S`, `MINIO_READ_TIMEOUT_S` | origin | `1`, `5` | MinIO timeouts |
-| `MINIO_BROWSER` | minio | on | `off` disables the console (needed on Render) |
+| `MINIO_BROWSER` | minio | on | Enable the console; on Render, pair with `MINIO_CONSOLE_PROXY=on` so it is reachable through `/console/` on the public port |
 | `GOMEMLIMIT` | minio | none | Keeps MinIO inside the instance's memory |
 | `SEED_ARTICLES` | origin | `60` | Articles seeded at startup |
 | `CONNECT_TIMEOUT_S` | router, edges, shield | `1.5` | Connection timeout |

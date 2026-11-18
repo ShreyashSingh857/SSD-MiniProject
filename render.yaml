@@ -38,7 +38,11 @@ services:
     envVars:
       - fromGroup: edge-cdn-shared
       - key: MINIO_BROWSER
-        value: "off"
+        value: "on"
+      - key: MINIO_CONSOLE_PROXY
+        value: "on"
+      - key: MINIO_BROWSER_REDIRECT_URL
+        value: https://edge-cdn-minio.onrender.com/console
       - key: GOMEMLIMIT
         value: 350MiB
 
