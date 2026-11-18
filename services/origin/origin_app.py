@@ -19,6 +19,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse, Response
 from minio import Minio
 from minio.error import S3Error
+from minio.notificationconfig import NotificationConfig, QueueConfig
 
 from cdncore import config
 from cdncore.node import NodeState, install_admin
@@ -86,6 +87,18 @@ def _storage_was_wiped() -> bool:
 def _seed() -> int:
     if not client.bucket_exists(config.MINIO_BUCKET):
         client.make_bucket(config.MINIO_BUCKET)
+    if config.MINIO_WEBHOOK_ARN:
+        client.set_bucket_notification(
+            bucket_name=config.MINIO_BUCKET,
+            config=NotificationConfig(queue_config_list=[
+                QueueConfig(
+                    queue=config.MINIO_WEBHOOK_ARN,
+                    events=["s3:ObjectRemoved:Delete"],
+                    config_id="cdn-cache-invalidation",
+                ),
+            ]),
+        )
+        seed_info["delete_notifications"] = "enabled"
     version = generator.seed_version()
     if _read_marker() == version:
         return -1

@@ -9,7 +9,7 @@ document.
 - **Newspaper:** `index.html` on the web service. Every article, image, thumbnail, stylesheet and script is fetched through the
   CDN. Open the *CDN inspector* (bottom right) to see which layer served each object.
 - **Control room:** `dashboard.html` on the web service. Shows the live topology, hit ratios and latency. It also has the
-  failure buttons, a traffic generator, newsroom publishing and benchmarks.
+  failure buttons, a traffic generator, newsroom publishing, guided cache scenarios, MinIO deletion events and benchmarks.
 - **API docs:** `/docs` on the router.
 
 ## Architecture
@@ -53,6 +53,8 @@ Every response says where it was served from:
   recently used objects.
 - **Purge on publish:** publishing breaking news writes the article to MinIO and purges
   `index:latest` from every cache.
+- **MinIO deletion events:** bucket removal notifications are delivered to the router webhook, which purges the matching
+  object from every edge and Origin Shield. The dashboard shows event delivery and per-node propagation timings.
 
 ### Failure handling
 
@@ -168,6 +170,9 @@ These are the router's endpoints. When `CONTROL_TOKEN` is set, every POST needs 
 | POST | `/failure/{component}` | `{"down": true\|false}` for `edge-1..3`, `shield`, `origin`; `/failure/reset` restores everything |
 | GET/POST | `/config` | Runtime config (TTLs, collapsing, origin delay, timeouts), pushed to every node |
 | POST | `/api/publish` | Publish a breaking-news article and purge the homepage index |
+| POST | `/api/delete/{object_id}` | Delete an object through the origin and wait for MinIO's removal event and cache invalidation |
+| POST | `/minio/events` | Authenticated MinIO webhook receiver for bucket removal events |
+| GET | `/api/invalidation/events` | Recent MinIO delete events, delivery latency and per-node purge timings |
 | POST/GET | `/api/benchmark` | Start a scenario (`workload`, `direct_vs_edge`, `shield_vs_origin`, `collapsing`, `delayed_origin`, `failures`, `all`) / read results |
 
 ## Notes
