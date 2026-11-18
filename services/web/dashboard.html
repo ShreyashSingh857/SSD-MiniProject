@@ -233,6 +233,7 @@ td.num, th.num { text-align: right; }
     <label>Cache layer <select id="purge-layer"><option value="all">All (3 Edges + Shield)</option><option value="edges">All Edges</option><option value="edge-1">Edge 1</option><option value="edge-2">Edge 2</option><option value="edge-3">Edge 3</option><option value="shield">Shield</option></select></label>
     <div class="btns"><button id="purge-by-object">Purge object ID</button><button id="purge-by-surrogate">Purge surrogate key</button><button id="inventory-refresh">Refresh inventory</button></div>
     <pre id="purge-result" class="msg">Choose a purge action to see node acknowledgements.</pre>
+    <div class="btns"><label style="flex:1;min-width:220px">Filter inventory <input id="inventory-filter" type="search" style="flex:1;padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface-2)" placeholder="e.g. thumbnail 15, homepage, edge-2" autocomplete="off"></label><span id="inventory-count" class="hint"></span></div>
     <div class="scroll"><table><thead><tr><th>Node</th><th>Object</th><th>Surrogate keys</th><th>TTL</th><th>Remaining</th><th>Status</th></tr></thead><tbody id="cache-inventory"></tbody></table></div>
   </section>
 
@@ -487,8 +488,10 @@ async function refreshSlow({ reportErrors = false } = {}) {
         const safeKey = esc(key);
         return `<span class="copy-group"><button type="button" class="copy-key" data-copy-value="${safeKey}" aria-label="Copy surrogate key ${safeKey}">Copy</button><code class="cache-key">${safeKey}</code></span>`;
       }).join("") || "–";
-      return `<tr><td>${esc(o.node)}</td><td><button type="button" class="copy-key" data-copy-value="${objectId}" aria-label="Copy object key ${objectId}">Copy</button><code class="cache-key">${objectId}</code></td><td>${surrogateKeys}</td><td>${o.max_age ?? "–"}s</td><td>${fmt(o.remaining_ttl, 1)}s</td><td>${esc(o.status)}</td></tr>`;
+      const searchText = esc([o.node, o.object_id, ...(o.surrogate_keys || []), o.status].join(" ").toLowerCase());
+      return `<tr data-search="${searchText}"><td>${esc(o.node)}</td><td><button type="button" class="copy-key" data-copy-value="${objectId}" aria-label="Copy object key ${objectId}">Copy</button><code class="cache-key">${objectId}</code></td><td>${surrogateKeys}</td><td>${o.max_age ?? "–"}s</td><td>${fmt(o.remaining_ttl, 1)}s</td><td>${esc(o.status)}</td></tr>`;
     }).join("") || `<tr><td colspan="6">No cached objects. Request content to populate Edge and Shield.</td></tr>`;
+    applyInventoryFilter();
     const propagation = window.lastInvalidation;
     if (propagation) renderInvalidation(propagation);
     const events = await api("/api/invalidation/events?limit=10");
@@ -504,6 +507,32 @@ async function refreshSlow({ reportErrors = false } = {}) {
     if (reportErrors) throw e;
   }
 }
+
+// Filter the cache inventory by node, object ID, surrogate key or status. Every space-separated
+// term must match, so "thumbnail 15" finds thumbnail:...-015. Re-applied after each 2.5 s refresh.
+function applyInventoryFilter() {
+  const input = $("inventory-filter");
+  if (!input) return;
+  const terms = input.value.toLowerCase().split(/\s+/).filter(Boolean);
+  const rows = [...$("cache-inventory").querySelectorAll("tr[data-search]")];
+  let shown = 0;
+  rows.forEach((row) => {
+    const match = terms.every((t) => row.dataset.search.includes(t));
+    row.hidden = !match;
+    if (match) shown++;
+  });
+  let empty = $("cache-inventory").querySelector("tr.filter-empty");
+  if (rows.length && !shown) {
+    if (!empty) {
+      empty = document.createElement("tr");
+      empty.className = "filter-empty";
+      empty.innerHTML = '<td colspan="6">No cached objects match this filter.</td>';
+      $("cache-inventory").appendChild(empty);
+    }
+  } else if (empty) empty.remove();
+  $("inventory-count").textContent = terms.length ? `${shown} of ${rows.length} shown` : (rows.length ? `${rows.length} objects` : "");
+}
+$("inventory-filter").addEventListener("input", applyInventoryFilter);
 
 async function copyToClipboard(value) {
   if (navigator.clipboard && window.isSecureContext) {
