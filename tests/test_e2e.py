@@ -7,6 +7,7 @@ import time
 import urllib.error
 import urllib.request
 import json
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -89,10 +90,72 @@ def test_minio_delete_invalidates_every_cache_node():
     status, _, body = call(f"/api/delete/{object_id}", "POST", {})
     result = json.loads(body)
     assert status == 200
+    assert result["source"] == "minio-event"
     assert set(result["purged"]) == {"edge-1", "edge-2", "edge-3", "shield"}
     assert result["propagation_latency_ms"] >= 0
     assert all("propagation_latency_ms" in node for node in result["purged"].values())
     assert call(f"/content/{object_id}")[0] == 404
+
+
+def test_collapsing_toggle_changes_concurrent_fetches():
+    _, _, original = call("/config")
+    original_config = json.loads(original)
+    object_id = "image:world-013"
+
+    def burst():
+        with ThreadPoolExecutor(max_workers=20) as pool:
+            return list(pool.map(lambda _: call(f"/content/{object_id}")[0], range(20)))
+
+    try:
+        call("/config", "POST", {"collapsing": False})
+        call("/cache/flush", "POST", {"layer": "all"})
+        call("/metrics/reset", "POST", {})
+        assert all(status == 200 for status in burst())
+        _, _, off_metrics = call("/metrics")
+        off_fetches = json.loads(off_metrics)["nodes"]["shield"]["counters"].get("origin_fetches", 0)
+
+        call("/config", "POST", {"collapsing": True})
+        call("/cache/flush", "POST", {"layer": "all"})
+        call("/metrics/reset", "POST", {})
+        assert all(status == 200 for status in burst())
+        _, _, on_metrics = call("/metrics")
+        shield = json.loads(on_metrics)["nodes"]["shield"]["counters"]
+        assert off_fetches > 1
+        assert shield.get("origin_fetches", 0) == 1
+        assert shield.get("collapsed", 0) > 0
+    finally:
+        call("/config", "POST", original_config)
+        call("/cache/flush", "POST", {"layer": "all"})
+
+
+def test_expired_cache_serves_stale_during_origin_failure():
+    _, _, original = call("/config")
+    original_config = json.loads(original)
+    _, _, index_body = call("/content/index:latest")
+    index = json.loads(index_body)
+    object_ids = ["static:homepage.css", "static:app.js", "static:logo.svg", "index:latest"]
+    for article in index["articles"][:4]:
+        object_ids.extend((f"thumbnail:{article['article_id']}", f"image:{article['article_id']}"))
+    object_ids = object_ids[:12]
+
+    def burst():
+        with ThreadPoolExecutor(max_workers=len(object_ids)) as pool:
+            return list(pool.map(lambda object_id: call(f"/content/{object_id}"), object_ids))
+
+    try:
+        call("/config", "POST", {"ttls": {key: 1 for key in original_config["ttls"]}})
+        call("/cache/flush", "POST", {"layer": "all"})
+        warmed = burst()
+        assert all(status == 200 for status, _, _ in warmed)
+        time.sleep(2.3)  # edge TTL is 1s; shield TTL is 2s
+        call("/failure/origin", "POST", {"down": True})
+        stale = burst()
+        assert all(status == 200 and headers["x-cache"].startswith("STALE")
+                   for status, headers, _ in stale)
+    finally:
+        call("/failure/reset", "POST", {})
+        call("/config", "POST", original_config)
+        call("/cache/flush", "POST", {"layer": "all"})
 
 
 def test_metrics_and_health_shape():

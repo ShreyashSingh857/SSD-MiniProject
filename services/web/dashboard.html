@@ -180,7 +180,7 @@ td.num, th.num { text-align: right; }
 
     <section class="panel controls">
       <h2>Cache &amp; origin</h2>
-      <p class="hint">Changes are pushed to every node.</p>
+      <p class="hint">Request collapsing applies immediately. TTL and origin delay values apply with Apply.</p>
       <label>Request collapsing <select id="collapsing"><option value="true">On</option><option value="false">Off</option></select></label>
       <label>Origin delay <input type="range" id="delay" min="0" max="1000" step="10" value="120"><b id="delay-val">120 ms</b></label>
       <label>Breaking-news TTL (s) <input type="number" id="ttl-breaking" min="1" value="20"></label>
@@ -193,18 +193,22 @@ td.num, th.num { text-align: right; }
     <section class="panel controls">
       <h2>Newsroom &amp; metrics</h2>
       <p class="hint">Publishing writes to MinIO and purges the cached homepage index everywhere.</p>
-      <label>MinIO object ID <input type="text" id="delete-object" value="static:homepage.css"></label>
-      <div class="btns"><button id="delete-object-btn">Delete object + invalidate caches</button>
+      <p class="hint">Restore simulated failures brings failed services online; it does not restore objects deleted from MinIO.</p>
+      <label>MinIO object ID <input type="text" id="delete-object" value="" placeholder="Publish an article to choose a safe demo object"></label>
+      <p class="hint">Console demo: publish an article, open its link to warm the cache, then delete its article/&lt;id&gt; object in MinIO. The webhook invalidates caches automatically. The button runs that same deletion from this dashboard.</p>
+      <div class="btns"><button id="delete-object-btn">Delete from MinIO via dashboard</button>
         <button class="primary" id="publish">Publish breaking news</button>
-        <button id="restore">Restore all components</button><button id="reset">Reset metrics</button></div>
-      <div class="msg" id="news-msg"></div>
+        <button id="restore">Restore simulated failures</button><button id="reset">Reset metrics</button></div>
+      <div class="msg" id="news-msg" role="status" aria-live="polite"></div>
     </section>
   </div>
 
   <section class="panel controls">
     <h2>Guided cache scenarios</h2>
     <p class="hint">Run a repeatable demonstration and follow each live step. Temporary failures and TTL changes are restored when the run finishes.</p>
-    <p class="hint">Deletion is performed through this app’s MinIO API so it can invalidate caches. Deleting directly in the MinIO console does not currently send an invalidation event.</p>
+    <p class="hint">MinIO bucket delete events are sent to the router webhook. Delete through this panel or directly in the MinIO console to watch cache purges arrive.</p>
+    <p class="hint">Deletion removes the cached copy, so it cannot demonstrate stale serving. Use “Origin failure → stale response” to expire a still-existing cached object, take Origin offline, and observe the stale fallback.</p>
+    <label>Requests per scenario <input type="range" id="demo-request-count" min="4" max="100" step="1" value="30"><b id="demo-request-count-value">30</b></label>
     <div class="btns">
       <button class="primary" data-demo="cache">Cache fill → cache hit</button>
       <button data-demo="delete">MinIO delete → propagation</button>
@@ -260,10 +264,13 @@ td.num, th.num { text-align: right; }
     <section class="panel"><h2>Cached object TTLs</h2><p class="hint">Sample of cached objects in each Redis node. Max-Age is the configured lifetime; remaining TTL counts down to expiry.</p>
       <div class="reqs scroll"><table><thead><tr><th>Node</th><th>Object</th><th class="num">Max-Age (s)</th><th class="num">Remaining TTL (s)</th><th>State</th></tr></thead>
         <tbody id="ttl-samples"></tbody></table></div></section>
-    <section class="panel"><h2>Latest invalidation propagation</h2><p class="hint">Measured from MinIO deletion through purge acknowledgement at each edge and Origin Shield.</p>
+    <section class="panel"><h2>Latest invalidation propagation</h2><p class="hint">MinIO event delivery and purge acknowledgement timing for every edge and Origin Shield.</p>
       <div class="msg" id="invalidation-summary">Delete an object above to record propagation timing.</div>
       <div class="scroll"><table><thead><tr><th>Cache node</th><th>Purged</th><th class="num">Propagation (ms)</th><th>Status</th></tr></thead>
-        <tbody id="invalidation-nodes"><tr><td colspan="4">No invalidation recorded yet.</td></tr></tbody></table></div></section>
+        <tbody id="invalidation-nodes"><tr><td colspan="4">No invalidation recorded yet.</td></tr></tbody></table></div>
+      <h3>Recent MinIO delete events</h3>
+      <div class="scroll"><table><thead><tr><th>Event</th><th>Object</th><th>Source</th><th class="num">Webhook delay (ms)</th><th class="num">Purge (ms)</th></tr></thead>
+        <tbody id="invalidation-events"><tr><td colspan="5">Delete an object from MinIO to generate a bucket event.</td></tr></tbody></table></div></section>
   </div>
 </div>
 
@@ -283,6 +290,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const pct = (v) => (v * 100).toFixed(1) + "%";
 const fmt = (v, d = 0) => Number(v || 0).toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d });
+const demoRequestCount = () => Number($("demo-request-count").value);
 const history = { rps: [], p95: [] };
 let last = null;
 let baselineConfig = null;
@@ -340,7 +348,8 @@ function nodeCard(name, m, health) {
   } else if (name === "shield") {
     const req = c.requests || 0;
     stats = `<span>hit</span><b>${req ? pct((c.hits || 0) / req) : "–"}</b><span>collapsed</span><b>${fmt(c.collapsed)}</b>
-      <span>origin fetch</span><b>${fmt(c.origin_fetches)}</b><span>stale</span><b>${fmt(c.stale_served)}</b>
+      <span>origin fetch</span><b>${fmt(c.origin_fetches)}</b><span>collapsing</span><b>${$("collapsing").value === "true" ? "ON" : "OFF"}</b>
+      <span>stale</span><b>${fmt(c.stale_served)}</b>
       <span>circuit</span><b>${esc(shieldExtra.circuit || "–")}</b><span>pool</span><b>${esc(shieldExtra.pool || "–")}</b>`;
   } else {
     stats = `<span>requests</span><b>${fmt(c.origin_requests)}</b><span>p95</span><b>${fmt(lat.p95_ms, 1)} ms</b>
@@ -352,6 +361,7 @@ function nodeCard(name, m, health) {
     <button class="${down ? "" : "danger"}" data-fail="${esc(name)}" data-down="${down ? "false" : "true"}">${down ? "Restore" : "Fail"}</button></div>`;
 }
 let shieldExtra = {};
+let appliedCollapsing = true;
 function renderTopo(m) {
   $("topo").innerHTML = NODE_ORDER.map((col) => `<div class="col">${col.map((n) => nodeCard(n, m, m.health)).join("")}</div>`).join("");
 }
@@ -470,6 +480,15 @@ async function refreshSlow() {
     $("cache-inventory").innerHTML = inventory.objects.map((o) => `<tr><td>${esc(o.node)}</td><td>${esc(o.object_id)}</td><td>${esc((o.surrogate_keys || []).join(" "))}</td><td>${o.max_age ?? "–"}s</td><td>${fmt(o.remaining_ttl, 1)}s</td><td>${esc(o.status)}</td></tr>`).join("") || `<tr><td colspan="6">No cached objects. Request content to populate Edge and Shield.</td></tr>`;
     const propagation = window.lastInvalidation;
     if (propagation) renderInvalidation(propagation);
+    const events = await api("/api/invalidation/events?limit=10");
+    $("invalidation-events").innerHTML = events.map((event) =>
+      `<tr><td>${esc(event.event_name)}</td><td>${esc(event.deleted)}</td><td>${esc(event.source)}</td>` +
+      `<td class="num">${event.delivery_latency_ms == null ? "–" : fmt(event.delivery_latency_ms, 2)}</td>` +
+      `<td class="num">${fmt(event.propagation_latency_ms, 2)}</td></tr>`).join("") ||
+      `<tr><td colspan="5">Delete an object from MinIO to generate a bucket event.</td></tr>`;
+    if (events.length && (!window.lastInvalidation || window.lastInvalidation.event_id !== events[0].event_id)) {
+      window.lastInvalidation = events[0]; renderInvalidation(events[0]);
+    }
   } catch (e) { /* router restarting */ }
 }
 
@@ -489,7 +508,9 @@ $("inventory-refresh").addEventListener("click", refreshSlow);
 
 function renderInvalidation(result) {
   const perNode = result.purged || {};
-  $("invalidation-summary").textContent = `Deleted ${result.deleted}; total propagation ${fmt(result.propagation_latency_ms, 2)} ms.`;
+  const delay = result.delivery_latency_ms == null ? "webhook delay unavailable" : `webhook delay ${fmt(result.delivery_latency_ms, 2)} ms`;
+  $("invalidation-summary").textContent = `${result.event_name || "Deletion"}: ${result.deleted} (${result.source || "unknown source"}); ${delay}; ` +
+    `purge ${fmt(result.propagation_latency_ms, 2)} ms`;
   $("invalidation-nodes").innerHTML = Object.entries(perNode).map(([name, node]) =>
     `<tr><td>${esc(name)}</td><td class="num">${node.flushed ?? "–"}</td>` +
     `<td class="num">${node.propagation_latency_ms == null ? "–" : fmt(node.propagation_latency_ms, 2)}</td>` +
@@ -537,6 +558,7 @@ $("traffic").addEventListener("click", async () => {
   gen.on = true; $("traffic").textContent = "Stop traffic"; gen.timer = setInterval(tick, 100);
 });
 $("rps").addEventListener("input", () => { $("rps-val").textContent = $("rps").value; });
+$("demo-request-count").addEventListener("input", () => { $("demo-request-count-value").textContent = $("demo-request-count").value; });
 
 /* ---------- config + actions */
 $("delay").addEventListener("input", () => { $("delay-val").textContent = $("delay").value + " ms"; });
@@ -544,8 +566,23 @@ async function loadConfig() {
   const c = await api("/config");
   baselineConfig = JSON.parse(JSON.stringify(c));
   $("collapsing").value = String(c.collapsing); $("delay").value = c.origin_delay_ms; $("delay-val").textContent = c.origin_delay_ms + " ms";
+  appliedCollapsing = c.collapsing;
   $("ttl-breaking").value = c.ttls.breaking; $("ttl-image").value = c.ttls.image;
 }
+
+$("collapsing").addEventListener("change", async () => {
+  const next = $("collapsing").value === "true";
+  $("collapsing").disabled = true;
+  try {
+    const config = await api("/config", { method: "POST", body: { collapsing: next } });
+    appliedCollapsing = config.collapsing;
+    $("config-msg").textContent = `Request collapsing ${appliedCollapsing ? "enabled" : "disabled"} on all nodes.`;
+    refresh();
+  } catch (error) {
+    $("collapsing").value = String(appliedCollapsing);
+    $("config-msg").textContent = `Could not update request collapsing: ${error.message}`;
+  } finally { $("collapsing").disabled = false; }
+});
 
 function demoLog(title, state, detail) {
   const row = document.createElement("div");
@@ -590,21 +627,22 @@ async function runDemo(name) {
   try {
     if (name === "cache") {
       const objectId = "static:logo.svg";
+      const requestCount = demoRequestCount();
       await demoStep("Clear this object from every cache", async () => {
         const r = await api("/cache/flush", { method: "POST", body: { layer: "all", object_id: objectId } });
         return { detail: `Purged ${Object.values(r.result).reduce((n, x) => n + (x.flushed || 0), 0)} copies` };
       });
       const seen = [];
-      await demoStep("Request it through the CDN four times", async () => {
-        for (let i = 0; i < 4; i++) seen.push(await requestDemoObject(objectId));
-        const layers = seen.map((r) => r.layer || `HTTP ${r.status}`);
-        const hasHit = seen.some((r) => r.layer === "HIT-EDGE" || r.layer === "HIT-SHIELD");
-        return { ok: seen.every((r) => r.status === 200) && hasHit,
-          detail: layers.join(" → ") + `; last Max-Age ${seen[seen.length - 1].maxAge}s, remaining TTL ${seen[seen.length - 1].ttl}s` };
+      await demoStep(`Send ${requestCount} requests through the router`, async () => {
+        for (let i = 0; i < requestCount; i++) seen.push(await requestDemoObject(objectId));
+        const edgeHits = seen.filter((r) => r.layer === "HIT-EDGE").length;
+        const shieldHits = seen.filter((r) => r.layer === "HIT-SHIELD").length;
+        return { ok: seen.every((r) => r.status === 200) && edgeHits + shieldHits > 0 && edgeHits > 0,
+          detail: `${seen.length} responses: ${edgeHits} edge hits, ${shieldHits} shield hits; Max-Age ${seen[seen.length - 1].maxAge}s, TTL ${seen[seen.length - 1].ttl}s` };
       });
       await demoStep("Observe the warm edge response", async () => {
-        const hit = seen.find((r) => r.layer === "HIT-EDGE");
-        return { ok: Boolean(hit), detail: hit ? `Edge hit; TTL ${hit.ttl}s of ${hit.maxAge}s` : "This round-robin pass reached shield hits, but not the same edge twice" };
+        const edgeHits = seen.filter((r) => r.layer === "HIT-EDGE").length;
+        return { ok: edgeHits > 0, detail: `${edgeHits}/${seen.length} requests were edge hits` };
       });
     } else if (name === "delete") {
       let articleId;
@@ -614,9 +652,12 @@ async function runDemo(name) {
         return { detail: `Created article:${articleId}` };
       });
       const objectId = `article:${articleId}`;
-      await demoStep("Warm the edge and shield caches", async () => {
-        const r = await requestDemoObject(objectId);
-        return { ok: r.status === 200, detail: `${r.layer} from ${r.edge}` };
+      const requestCount = demoRequestCount();
+      await demoStep(`Warm caches with ${requestCount} router requests`, async () => {
+        const warmed = [];
+        for (let i = 0; i < requestCount; i++) warmed.push(await requestDemoObject(objectId));
+        const hits = warmed.filter((r) => r.layer === "HIT-EDGE" || r.layer === "HIT-SHIELD").length;
+        return { ok: warmed.every((r) => r.status === 200), detail: `${warmed.length} successful; ${hits} cache hits before deletion` };
       });
       let result;
       await demoStep("Delete from MinIO and collect purge acknowledgements", async () => {
@@ -633,36 +674,56 @@ async function runDemo(name) {
       });
     } else if (name === "stale") {
       savedConfig = await api("/config");
-      const objectId = "static:app.js";
-      await demoStep("Set a short 1-second TTL and clear old copies", async () => {
-        await api("/config", { method: "POST", body: { ttls: { ...savedConfig.ttls, static: 1 } } });
-        await api("/cache/flush", { method: "POST", body: { layer: "all", object_id: objectId } });
-        return { detail: "Edge TTL 1s; shield TTL 2s" };
+      const requestCount = demoRequestCount();
+      let objectIds = [];
+      await demoStep("Choose distinct existing objects from the router", async () => {
+        const response = await fetch(`${CDN_API}/content/index:latest`, { cache: "no-store" });
+        if (!response.ok) throw new Error("Could not load the article index through the router");
+        const index = await response.json();
+        objectIds = ["static:homepage.css", "static:app.js", "static:logo.svg", "index:latest"];
+        index.articles.forEach((article) => objectIds.push(`thumbnail:${article.article_id}`, `image:${article.article_id}`));
+        objectIds = objectIds.slice(0, requestCount);
+        return { detail: `${objectIds.length} unique objects selected` };
       });
-      await demoStep("Warm both cache tiers", async () => {
-        const r = await requestDemoObject(objectId);
-        return { ok: r.status === 200, detail: `${r.layer}; Max-Age ${r.maxAge}s` };
+      await demoStep("Set every cache class to a 1-second TTL and flush old copies", async () => {
+        const ttls = Object.fromEntries(Object.keys(savedConfig.ttls).map((key) => [key, 1]));
+        await api("/config", { method: "POST", body: { ttls } });
+        await api("/cache/flush", { method: "POST", body: { layer: "all" } });
+        return { detail: `${objectIds.length} objects; shield TTL is 2s` };
       });
-      await demoStep("Wait for both TTLs to expire", async () => {
+      await demoStep(`Warm ${objectIds.length} distinct objects through the router`, async () => {
+        const warmed = await Promise.all(objectIds.map(requestDemoObject));
+        const successful = warmed.filter((response) => response.status === 200).length;
+        return { ok: successful === objectIds.length, detail: `${successful}/${warmed.length} objects warmed` };
+      });
+      await demoStep("Wait for all edge and shield copies to expire", async () => {
         await new Promise((resolve) => setTimeout(resolve, 2300));
-        return { detail: "Waited 2.3 seconds" };
+        return { detail: `Waited 2.3s for ${objectIds.length} objects (edge 1s, shield 2s)` };
       });
       await demoStep("Simulate an origin outage", async () => {
         await api("/failure/origin", { method: "POST", body: { down: true } });
         return { detail: "Origin marked down" };
       });
-      await demoStep("Request the expired object while origin is down", async () => {
-        const r = await requestDemoObject(objectId);
-        return { ok: r.status === 200 && (r.layer || "").startsWith("STALE"), detail: `HTTP ${r.status}, ${r.layer}` };
+      await demoStep(`Send ${objectIds.length} expired-object requests through the router`, async () => {
+        const responses = await Promise.all(objectIds.map(requestDemoObject));
+        const staleCount = responses.filter((r) => r.status === 200 && (r.layer || "").startsWith("STALE")).length;
+        const byLayer = responses.reduce((counts, r) => {
+          const layer = r.layer || `HTTP-${r.status}`;
+          counts[layer] = (counts[layer] || 0) + 1;
+          return counts;
+        }, {});
+        return { ok: staleCount === objectIds.length,
+          detail: `${staleCount}/${responses.length} stale responses; ${Object.entries(byLayer).map(([layer, count]) => `${layer}: ${count}`).join(", ")}` };
       });
     } else if (name === "failover") {
+      const requestCount = demoRequestCount();
       await demoStep("Take edge-1 out of service", async () => {
         await api("/failure/edge-1", { method: "POST", body: { down: true } });
         return { detail: "Router health state updated" };
       });
-      await demoStep("Send six requests and inspect the serving edges", async () => {
+      await demoStep(`Send ${requestCount} requests through the router and inspect serving edges`, async () => {
         const seen = [];
-        for (let i = 0; i < 6; i++) seen.push(await requestDemoObject("static:logo.svg"));
+        for (let i = 0; i < requestCount; i++) seen.push(await requestDemoObject("static:logo.svg"));
         const edges = [...new Set(seen.map((r) => r.edge))];
         return { ok: seen.every((r) => r.status === 200 && r.edge !== "edge-1") && edges.length > 0,
           detail: `Served by ${edges.join(", ")}; edge-1 served none` };
@@ -703,6 +764,7 @@ $("demo-reset").addEventListener("click", async () => {
     $("news-msg").textContent = "";
     $("invalidation-summary").textContent = "Delete an object above to record propagation timing.";
     $("invalidation-nodes").innerHTML = `<tr><td colspan="4">No invalidation recorded yet.</td></tr>`;
+    $("invalidation-events").innerHTML = `<tr><td colspan="5">Delete an object from MinIO to generate a bucket event.</td></tr>`;
     refresh(); refreshSlow();
   } catch (error) {
     $("demo-status").textContent = `Reset failed: ${error.message || error}`;
@@ -712,6 +774,7 @@ $("apply").addEventListener("click", async () => {
   try {
     await api("/config", { method: "POST", body: { collapsing: $("collapsing").value === "true", origin_delay_ms: Number($("delay").value),
       ttls: { breaking: Number($("ttl-breaking").value), image: Number($("ttl-image").value), thumbnail: Number($("ttl-image").value) } } });
+    appliedCollapsing = $("collapsing").value === "true";
     $("config-msg").textContent = "Applied to all nodes.";
   } catch (e) { $("config-msg").textContent = "Failed: " + e.message; }
 });
@@ -725,18 +788,32 @@ for (const layer of ["all", "edges", "shield"]) {
 $("publish").addEventListener("click", async () => {
   try {
     const r = await api("/api/publish", { method: "POST", body: {} });
+    $("delete-object").value = `article:${r.published.article_id}`;
     $("news-msg").innerHTML = `Published <a href="index.html#/article/${esc(r.published.article_id)}">${esc(r.published.title)}</a>`;
     if (gen.on) loadObjects();
   } catch (e) { $("news-msg").textContent = "Publish failed: " + e.message; }
 });
 $("delete-object-btn").addEventListener("click", async () => {
+  const button = $("delete-object-btn");
+  const objectId = $("delete-object").value.trim();
+  if (!objectId || !objectId.includes(":")) {
+    $("news-msg").textContent = "Enter an object ID in kind:name format, for example article:breaking-news-001.";
+    return;
+  }
+  button.disabled = true;
+  button.textContent = "Deleting from MinIO…";
+  $("news-msg").textContent = `Deleting ${objectId} and waiting for cache invalidation…`;
   try {
-    const objectId = $("delete-object").value.trim();
     const result = await api(`/api/delete/${encodeURIComponent(objectId)}`, { method: "POST", body: {} });
-    window.lastInvalidation = result; renderInvalidation(result); refreshSlow();
+    window.lastInvalidation = result; renderInvalidation(result);
+    const acknowledged = Object.values(result.purged || {}).filter((node) => !node.error).length;
+    const source = result.source === "minio-event" ? "MinIO delete event received" : "MinIO event timed out; fallback purge used";
+    $("news-msg").textContent = `${result.deleted} deleted. ${source}; ${acknowledged}/4 cache nodes acknowledged in ${fmt(result.propagation_latency_ms, 2)} ms.`;
+    refreshSlow(); refresh();
   } catch (e) { $("news-msg").textContent = "Delete failed: " + e.message; }
+  finally { button.disabled = false; button.textContent = "Delete from MinIO via dashboard"; }
 });
-$("restore").addEventListener("click", async () => { await api("/failure/reset", { method: "POST", body: {} }); $("news-msg").textContent = "All components restored."; refresh(); });
+$("restore").addEventListener("click", async () => { await api("/failure/reset", { method: "POST", body: {} }); $("news-msg").textContent = "Simulated failures cleared; MinIO content was not changed."; refresh(); });
 $("reset").addEventListener("click", async () => { await api("/metrics/reset", { method: "POST" }); history.rps = []; history.p95 = []; gen.sent = gen.failed = 0; refresh(); refreshSlow(); });
 
 /* ---------- benchmarks */

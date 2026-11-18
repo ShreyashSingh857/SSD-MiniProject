@@ -12,10 +12,12 @@ import itertools
 import time
 from collections import deque
 from contextlib import asynccontextmanager
-from urllib.parse import quote
+from datetime import datetime
+from urllib.parse import quote, unquote_plus
+import uuid
 
 import aiohttp
-from fastapi import Body, FastAPI
+from fastapi import Body, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
@@ -34,6 +36,8 @@ health: dict[str, dict] = {name: {"up": True, "checked_at": None, "latency_ms": 
 rr = itertools.count()
 metrics = Metrics()
 request_log: deque[dict] = deque(maxlen=200)
+invalidation_log: deque[dict] = deque(maxlen=100)
+pending_invalidations: dict[str, asyncio.Future] = {}
 runtime = RuntimeConfig()
 benchmark_state: dict = {"running": False, "scenario": None, "started_at": None, "results": {}, "error": None}
 http: aiohttp.ClientSession | None = None
@@ -80,7 +84,8 @@ class ControlAuth:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] == "http" and scope["method"] == "POST" and config.CONTROL_TOKEN:
+        if (scope["type"] == "http" and scope["method"] == "POST"
+                and scope.get("path") != "/minio/events" and config.CONTROL_TOKEN):
             sent = dict(scope["headers"]).get(b"x-control-token", b"").decode("latin-1")
             if not hmac.compare_digest(sent, config.CONTROL_TOKEN):
                 await JSONResponse({"error": "control token required"}, status_code=401)(scope, receive, send)
@@ -267,6 +272,10 @@ def summarize(router_snap: dict, nodes: dict[str, dict]) -> dict:
         "stale_served": stale,
         "stale_duration_avg_ms": round(stale_ms / stale_count, 1) if stale_count else 0,
         "stale_duration_max_ms": stale_max,
+        "cache_invalidations": c.get("cache_invalidations", 0),
+        "invalidation_propagation_avg_ms": round(
+            c.get("cache_invalidation_latency_ms_total", 0) / c.get("cache_invalidations", 1), 2),
+        "invalidation_propagation_max_ms": c.get("cache_invalidation_latency_ms_max", 0),
         "failovers": c.get("failovers", 0),
         "errors": c.get("errors", 0),
     }
@@ -286,6 +295,7 @@ async def get_metrics():
 async def reset_metrics():
     metrics.reset()
     request_log.clear()
+    invalidation_log.clear()
     return {"reset": await all_nodes("POST", "/admin/metrics/reset")}
 
 
@@ -314,6 +324,68 @@ async def cache_objects():
     nodes = await all_nodes("GET", "/admin/cache/objects", names=list(EDGES) + ["shield"])
     return {"nodes": nodes, "objects": [dict(node=name, **obj)
             for name, result in nodes.items() for obj in result.get("objects", [])]}
+
+
+async def propagate_minio_delete(object_id: str, record: dict, source: str = "minio-event") -> dict:
+    """Purge every cache for a MinIO removal event and retain its propagation timings."""
+    event_time = None
+    raw_event_time = record.get("eventTime")
+    if raw_event_time:
+        try:
+            event_time = datetime.fromisoformat(raw_event_time.replace("Z", "+00:00")).timestamp()
+        except (TypeError, ValueError):
+            event_time = None
+    received_at = time.time()
+    started = time.perf_counter()
+    purged = await all_nodes("POST", "/admin/flush", {"object_id": object_id}, list(EDGES) + ["shield"])
+    propagation_ms = round((time.perf_counter() - started) * 1000, 2)
+    completed_at = time.time()
+    result = {
+        "event_id": uuid.uuid4().hex[:12],
+        "deleted": object_id,
+        "source": source,
+        "event_name": record.get("eventName", "s3:ObjectRemoved:Delete"),
+        "event_time": event_time,
+        "received_at": received_at,
+        "delivery_latency_ms": round(max(0, received_at - event_time) * 1000, 2) if event_time else None,
+        "propagation_latency_ms": propagation_ms,
+        "end_to_end_latency_ms": round(max(0, completed_at - event_time) * 1000, 2) if event_time else None,
+        "purged": purged,
+    }
+    invalidation_log.appendleft(result)
+    metrics.inc("cache_invalidations")
+    metrics.inc("cache_invalidation_latency_ms_total", int(propagation_ms))
+    metrics.counters["cache_invalidation_latency_ms_max"] = max(
+        metrics.counters["cache_invalidation_latency_ms_max"], int(propagation_ms))
+    waiter = pending_invalidations.get(object_id)
+    if waiter is not None and not waiter.done():
+        waiter.set_result(result)
+    return result
+
+
+@app.post("/minio/events")
+async def minio_events(request: Request):
+    """Receive S3 bucket-removal events so deletes from MinIO itself invalidate cache nodes."""
+    expected = config.MINIO_WEBHOOK_AUTH_TOKEN
+    supplied = request.headers.get("authorization", "")
+    if not expected or not hmac.compare_digest(supplied, expected):
+        return JSONResponse({"error": "invalid MinIO webhook token"}, status_code=401)
+    payload = await request.json()
+    results = []
+    for record in payload.get("Records", []):
+        if not record.get("eventName", "").startswith("s3:ObjectRemoved:"):
+            continue
+        storage_key = unquote_plus(record.get("s3", {}).get("object", {}).get("key", ""))
+        kind, separator, name = storage_key.partition("/")
+        if not separator or kind not in {"article", "image", "thumbnail", "static", "index"} or not name:
+            continue
+        results.append(await propagate_minio_delete(f"{kind}:{name}", record))
+    return {"received": len(payload.get("Records", [])), "invalidated": results}
+
+
+@app.get("/api/invalidation/events")
+async def recent_invalidations(limit: int = 30):
+    return list(itertools.islice(invalidation_log, max(1, min(limit, 100))))
 
 
 @app.post("/cache/flush")
@@ -393,15 +465,22 @@ async def publish(payload: dict = Body(default={})):
 
 @app.post("/api/delete/{object_id}")
 async def delete_content(object_id: str):
-    """Delete an object from MinIO and invalidate it across all cache nodes."""
-    deleted = await node_call("origin", "POST", f"/admin/delete/{quote(object_id, safe=':')}")
-    if "error" in deleted:
-        return JSONResponse(deleted, status_code=503)
-    started = time.perf_counter()
-    purged = await all_nodes("POST", "/admin/flush", {"object_id": object_id}, list(EDGES) + ["shield"])
-    elapsed = round((time.perf_counter() - started) * 1000, 2)
-    metrics.inc("cache_invalidations")
-    return {**deleted, "purged": purged, "propagation_latency_ms": elapsed}
+    """Delete an object from MinIO and return the event-driven invalidation result."""
+    future = asyncio.get_running_loop().create_future()
+    pending_invalidations[object_id] = future
+    try:
+        deleted = await node_call("origin", "POST", f"/admin/delete/{quote(object_id, safe=':')}")
+        if "error" in deleted:
+            return JSONResponse(deleted, status_code=503)
+        try:
+            result = await asyncio.wait_for(asyncio.shield(future), timeout=8)
+        except asyncio.TimeoutError:
+            # Keep dashboard/API deletion reliable if webhook delivery is unavailable.
+            result = await propagate_minio_delete(object_id, {}, source="api-fallback")
+        return result
+    finally:
+        if pending_invalidations.get(object_id) is future:
+            pending_invalidations.pop(object_id, None)
 
 
 # ---------------------------------------------------------------- benchmarks
