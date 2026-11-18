@@ -30,7 +30,7 @@ from cdncore.upstream import get_raw, new_session
 EDGES = config.parse_edges()
 NODES = {**EDGES, "shield": config.SHIELD_URL.rstrip("/"), "origin": config.ORIGIN_URL.rstrip("/")}
 PASS_HEADERS = ("content-type", "x-cache", "x-served-by", "x-content-class", "age", "cache-control",
-                "x-max-age", "x-cache-ttl")
+                "x-max-age", "x-cache-ttl", "surrogate-key")
 
 health: dict[str, dict] = {name: {"up": True, "checked_at": None, "latency_ms": None} for name in NODES}
 rr = itertools.count()
@@ -211,7 +211,10 @@ async def node_call(name: str, method: str, path: str, payload: dict | None = No
     try:
         async with http.request(method, f"{NODES[name]}{path}", json=payload,
                                 timeout=aiohttp.ClientTimeout(total=config.ADMIN_TIMEOUT_S)) as resp:
-            return await resp.json(content_type=None)
+            result = await resp.json(content_type=None)
+            if resp.status >= 400:
+                result.setdefault("error", f"HTTP {resp.status}")
+            return result
     except Exception as exc:
         return {"node": name, "error": f"unreachable: {exc.__class__.__name__}"}
 
@@ -316,6 +319,13 @@ async def cache_status():
     return await all_nodes("GET", "/admin/status")
 
 
+@app.get("/cache/objects")
+async def cache_objects():
+    nodes = await all_nodes("GET", "/admin/cache/objects", names=list(EDGES) + ["shield"])
+    return {"nodes": nodes, "objects": [dict(node=name, **obj)
+            for name, result in nodes.items() for obj in result.get("objects", [])]}
+
+
 async def propagate_minio_delete(object_id: str, record: dict, source: str = "minio-event") -> dict:
     """Purge every cache for a MinIO removal event and retain its propagation timings."""
     event_time = None
@@ -380,7 +390,8 @@ async def recent_invalidations(limit: int = 30):
 
 @app.post("/cache/flush")
 async def cache_flush(payload: dict = Body(default={})):
-    """Flush caches. layer: all | edges | shield | <edge id>; optional object_id purges one object."""
+    """Flush selected caches or invalidate by object ID / surrogate key."""
+    started = time.perf_counter()
     layer = payload.get("layer", "all")
     if layer == "all":
         names = list(EDGES) + ["shield"]
@@ -390,8 +401,20 @@ async def cache_flush(payload: dict = Body(default={})):
         names = [layer]
     else:
         return JSONResponse({"error": f"unknown layer {layer!r}"}, status_code=400)
-    body = {"object_id": payload["object_id"]} if payload.get("object_id") else {}
-    return {"layer": layer, "result": await all_nodes("POST", "/admin/flush", body, names)}
+    object_id = payload.get("object_id")
+    surrogate_key = payload.get("surrogate_key")
+    if object_id and surrogate_key:
+        return JSONResponse({"error": "provide object_id or surrogate_key, not both"}, status_code=400)
+    body = {"object_id": object_id} if object_id else ({"surrogate_key": surrogate_key} if surrogate_key else {})
+    result = await all_nodes("POST", "/admin/flush", body, names)
+    failed = {n: v.get("error") for n, v in result.items() if v.get("error")}
+    count = sum(int(v.get("flushed", 0)) for v in result.values())
+    purge_type = "surrogate_key" if surrogate_key else "object_id" if object_id else "layer"
+    return {"layer": layer, "purge_type": purge_type, "object_id": object_id,
+            "surrogate_key": surrogate_key, "objects_invalidated": count,
+            "nodes_contacted": len(result) - len(failed), "failed_nodes": failed,
+            "propagation_latency_ms": round((time.perf_counter() - started) * 1000, 2),
+            "result": result}
 
 
 @app.get("/api/requests")

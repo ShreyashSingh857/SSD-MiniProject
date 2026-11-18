@@ -220,6 +220,19 @@ td.num, th.num { text-align: right; }
     <div class="scenario-steps" id="demo-steps"></div>
   </section>
 
+  <section class="panel controls">
+    <h2>Cache Invalidation &amp; Expiry Demo</h2>
+    <p class="hint">Each listed copy is local to its Edge or Shield Redis cache. TTL is configured max age; remaining TTL counts down, then the copy is stale during grace.</p>
+    <div class="row two">
+      <label>Object ID <input id="purge-object" placeholder="article:101"></label>
+      <label>Surrogate key <input id="purge-surrogate" placeholder="homepage"></label>
+    </div>
+    <label>Cache layer <select id="purge-layer"><option value="all">All (3 Edges + Shield)</option><option value="edges">All Edges</option><option value="edge-1">Edge 1</option><option value="edge-2">Edge 2</option><option value="edge-3">Edge 3</option><option value="shield">Shield</option></select></label>
+    <div class="btns"><button id="purge-by-object">Purge object ID</button><button id="purge-by-surrogate">Purge surrogate key</button><button id="inventory-refresh">Refresh inventory</button></div>
+    <pre id="purge-result" class="msg">Choose a purge action to see node acknowledgements.</pre>
+    <div class="scroll"><table><thead><tr><th>Node</th><th>Object</th><th>Surrogate keys</th><th>TTL</th><th>Remaining</th><th>Status</th></tr></thead><tbody id="cache-inventory"></tbody></table></div>
+  </section>
+
   <section class="panel">
     <h2>Benchmarks</h2>
     <p class="hint">Runs server-side through the router. Each scenario flushes caches and resets metrics, so live numbers above will jump.</p>
@@ -461,8 +474,10 @@ async function refreshSlow() {
     }).join("");
     const ttlRows = Object.entries(st).flatMap(([name, s]) => ((s.cache || {}).sample || []).map((obj) =>
       `<tr><td>${esc(name)}</td><td>${esc(obj.object_id)}</td><td class="num">${obj.max_age ?? "–"}</td>` +
-      `<td class="num">${fmt(Math.max(0, obj.expires_in ?? 0), 1)}</td><td>${obj.fresh ? "Fresh" : "Stale"}</td></tr>`));
+      `<td class="num">${fmt(Math.max(0, obj.expires_in ?? 0), 1)}</td><td>${obj.fresh ? "Fresh" : "Stale (logical TTL expired; grace period)"}</td></tr>`));
     $("ttl-samples").innerHTML = ttlRows.join("") || `<tr><td colspan="5">No cached objects yet. Send traffic to populate the caches.</td></tr>`;
+    const inventory = await api("/cache/objects");
+    $("cache-inventory").innerHTML = inventory.objects.map((o) => `<tr><td>${esc(o.node)}</td><td>${esc(o.object_id)}</td><td>${esc((o.surrogate_keys || []).join(" "))}</td><td>${o.max_age ?? "–"}s</td><td>${fmt(o.remaining_ttl, 1)}s</td><td>${esc(o.status)}</td></tr>`).join("") || `<tr><td colspan="6">No cached objects. Request content to populate Edge and Shield.</td></tr>`;
     const propagation = window.lastInvalidation;
     if (propagation) renderInvalidation(propagation);
     const events = await api("/api/invalidation/events?limit=10");
@@ -476,6 +491,20 @@ async function refreshSlow() {
     }
   } catch (e) { /* router restarting */ }
 }
+
+async function runManualPurge(kind) {
+  const key = kind === "object_id" ? $("purge-object").value.trim() : $("purge-surrogate").value.trim();
+  if (!key) { $("purge-result").textContent = `Enter a ${kind === "object_id" ? "object ID" : "surrogate key"}.`; return; }
+  try {
+    const response = await api("/cache/flush", { method: "POST", body: { layer: $("purge-layer").value, [kind]: key } });
+    window.lastInvalidation = { deleted: response.objects_invalidated, propagation_latency_ms: response.propagation_latency_ms, purged: response.result };
+    $("purge-result").textContent = JSON.stringify(response, null, 2);
+    refreshSlow();
+  } catch (error) { $("purge-result").textContent = `Purge failed: ${error.message}`; }
+}
+$("purge-by-object").addEventListener("click", () => runManualPurge("object_id"));
+$("purge-by-surrogate").addEventListener("click", () => runManualPurge("surrogate_key"));
+$("inventory-refresh").addEventListener("click", refreshSlow);
 
 function renderInvalidation(result) {
   const perNode = result.purged || {};

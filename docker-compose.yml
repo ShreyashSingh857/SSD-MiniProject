@@ -1,7 +1,7 @@
 # Every microservice in its own container. Each cache here uses a separate Redis container.
 #   docker compose up --build
 #   newspaper: http://localhost:8080   dashboard: http://localhost:8080/dashboard.html
-#   router API: http://localhost:8000/docs   MinIO console: http://localhost:9001
+#   router API: http://localhost:8000/docs   MinIO console: http://localhost:9002
 
 x-redis: &redis
   image: redis:7.4-alpine
@@ -23,7 +23,7 @@ services:
       MINIO_NOTIFY_WEBHOOK_ENDPOINT_CDN: "http://router:8000/minio/events"
       MINIO_NOTIFY_WEBHOOK_AUTH_TOKEN_CDN: "Bearer local-cdn-minio-events-token"
       MINIO_NOTIFY_WEBHOOK_QUEUE_DIR_CDN: "/data/events"
-    ports: ["9001:9001"]
+    ports: ["9002:9001"]
     volumes: [minio-data:/data]
     restart: unless-stopped
 
