@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse, Response
 
 from cdncore import config
-from cdncore.cache import CacheStore, CachedObject
+from cdncore.cache import CacheStore, CachedObject, default_surrogate_keys
 from cdncore.node import NodeState, install_admin
 from cdncore.upstream import Fetched, NotFound, UpstreamError, fetch, new_session
 
@@ -42,7 +42,7 @@ install_admin(app, state)
 
 
 def respond(body: bytes, content_type: str, content_class: str, layer: str, age: int = 0,
-            max_age: int = 0, remaining_ttl: int = 0) -> Response:
+            max_age: int = 0, remaining_ttl: int = 0, surrogate_keys: list[str] | None = None) -> Response:
     return Response(body, media_type=content_type, headers={
         "X-Cache": layer,
         "X-Served-By": state.node_id,
@@ -51,6 +51,7 @@ def respond(body: bytes, content_type: str, content_class: str, layer: str, age:
         "X-Max-Age": str(max_age), "X-Cache-TTL": str(remaining_ttl),
         # Keep browsers from caching so every page view exercises the CDN layers in the demo.
         "Cache-Control": "no-store",
+        "Surrogate-Key": " ".join(surrogate_keys or []),
     })
 
 
@@ -99,7 +100,7 @@ async def get_content(object_id: str):
         if cached is not None and cached.fresh:
             state.metrics.inc("hits")
             return respond(cached.body, cached.content_type, cached.content_class, "HIT-EDGE", cached.age,
-                           cached.max_age, cached.remaining_ttl)
+                           cached.max_age, cached.remaining_ttl, cached.surrogate_keys)
         state.metrics.inc("misses")
         if cached is not None:
             state.metrics.inc("expired")
@@ -114,18 +115,20 @@ async def get_content(object_id: str):
                 stale_for = max(0.0, time.time() - cached.expires_at)
                 state.metrics.observe_stale(stale_for * 1000)
                 return respond(cached.body, cached.content_type, cached.content_class, "STALE-EDGE", cached.age,
-                               cached.max_age, 0)
+                               cached.max_age, 0, cached.surrogate_keys)
             state.metrics.inc("errors")
             return JSONResponse({"error": f"content unavailable: {layer}"}, status_code=503,
                                 headers={"X-Served-By": state.node_id, "X-Cache": "ERROR"})
         state.metrics.inc_key(layer)
         ttl = STALE_RELAY_TTL if layer == "STALE-SHIELD" else state.config.ttl_for(fetched.content_class)
+        surrogate_keys = fetched.headers.get("surrogate-key", "").split()
         try:
             await state.store.set(object_id, fetched.body, fetched.content_type, fetched.content_class,
-                                  ttl, state.config.stale_grace_seconds)
+                                  ttl, state.config.stale_grace_seconds, surrogate_keys or None)
         except Exception:
             state.metrics.inc("cache_errors")
         return respond(fetched.body, fetched.content_type, fetched.content_class, layer,
-                       max_age=ttl, remaining_ttl=ttl)
+                       max_age=ttl, remaining_ttl=ttl,
+                       surrogate_keys=surrogate_keys or default_surrogate_keys(object_id))
     finally:
         state.metrics.observe((time.perf_counter() - started) * 1000)

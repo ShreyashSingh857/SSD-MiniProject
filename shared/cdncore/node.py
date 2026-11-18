@@ -117,9 +117,21 @@ def install_admin(app: FastAPI, state: NodeState,
 
     @app.post("/admin/flush")
     async def flush(payload: dict = Body(default={})):
+        if state.failed:
+            return down_response(state)
         if state.store is None:
             return {"node": state.node_id, "flushed": 0}
         object_id = payload.get("object_id")
-        flushed = await (state.store.delete(object_id) if object_id else state.store.flush())
+        surrogate_key = payload.get("surrogate_key")
+        flushed = await (state.store.delete(object_id) if object_id else
+                         state.store.purge_surrogate(surrogate_key) if surrogate_key else state.store.flush())
         state.metrics.inc("flushes")
         return {"node": state.node_id, "flushed": flushed}
+
+    @app.get("/admin/cache/objects")
+    async def cache_objects():
+        if state.failed:
+            return down_response(state)
+        if state.store is None:
+            return {"node": state.node_id, "objects": []}
+        return {"node": state.node_id, "objects": await state.store.objects()}

@@ -54,6 +54,57 @@ Every response says where it was served from:
 - **Purge on publish:** publishing breaking news writes the article to MinIO and purges
   `index:latest` from every cache.
 
+### Cache invalidation and expiry demo
+
+Each cached object carries zero or more surrogate keys. Demo defaults group `article:101` under
+`article-101`, `news`, and `homepage`; `image:101` is grouped under `article-101` and `media`.
+Responses expose the keys in `Surrogate-Key`. Every Edge and the Shield stores its own indexes.
+The Redis object hash is `obj:<object_id>` and stores `surrogate_keys`; each index member is an
+individually expiring string at `surrogate:<URL-encoded-key>:<URL-encoded-object-id>`. Its Redis
+expiry matches object TTL plus stale grace, so abandoned index entries expire without keyspace
+notifications or Redis `KEYS` scans. Replacements and explicit deletions remove old index entries.
+
+TTL expiration is automatic: logical expiry remains the configured content-class TTL and Redis
+retains the object and index through TTL plus `stale_grace_seconds` for stale-on-origin-failure.
+The dashboard's **Cache Invalidation & Expiry Demo** lists each node's objects, key groups,
+configured max age, remaining TTL, and fresh/stale status. Set Breaking-news TTL to a few seconds
+in Cache & origin and Apply, then request an article to watch it become stale. After grace it is
+removed by Redis. The dashboard inventory refreshes every 2.5 seconds.
+
+Manual object-ID purge removes that exact object from selected node caches. Surrogate-Key purge
+removes every locally indexed object in that group on selected nodes. A layer-only flush removes
+all objects on the selected layers. These operations are distinct from TTL expiry and do not
+delete content in MinIO. The existing `/api/delete/{object_id}` deletes at the origin and then
+purges all cache layers; publishing continues to purge `index:latest` everywhere.
+
+`POST /cache/flush` accepts `{"layer":"all|edges|shield|edge-1|edge-2|edge-3"}` and either
+`object_id` or `surrogate_key`. The response includes `purge_type`, requested identifier,
+`objects_invalidated`, `nodes_contacted`, `failed_nodes`, per-node `result`, and
+`propagation_latency_ms`. It is protected by the router's existing `CONTROL_TOKEN` middleware.
+`GET /cache/objects` returns node-by-node inventory for the dashboard. When a control token is
+configured, provide it as `X-Control-Token` on POST requests.
+
+```bash
+# Warm the object through the CDN, then remove one object from every cache layer
+curl -X POST http://localhost:8000/cache/flush -H 'Content-Type: application/json' \
+  -d '{"layer":"all","object_id":"article:101"}'
+
+# Remove all cached articles/images grouped as homepage content
+curl -X POST http://localhost:8000/cache/flush -H 'Content-Type: application/json' \
+  -d '{"layer":"all","surrogate_key":"homepage"}'
+
+# Flush only the Edge caches
+curl -X POST http://localhost:8000/cache/flush -H 'Content-Type: application/json' \
+  -d '{"layer":"edges"}'
+```
+
+Practical demo: open `/dashboard.html`, request `article:world-013` using the newspaper (the demo
+classifies article objects into `news` and `homepage`), then inspect Cache Invalidation & Expiry
+Demo. Purge `homepage` and observe removals on contacted Edge/Shield nodes. Warm it again, set the
+breaking TTL to 3 seconds, request a breaking-news object and watch remaining TTL reach zero and
+status turn stale. Restore the TTL afterwards. Object-ID purge targets one object; surrogate-key
+purge targets a content group; TTL expiry follows each object's configured age automatically.
+
 ### Failure handling
 
 | Failure | What happens |
@@ -160,7 +211,8 @@ These are the router's endpoints. When `CONTROL_TOKEN` is set, every POST needs 
 | GET | `/content/{object_id}` | Request any cacheable object, e.g. `image:world-013`, `static:homepage.css`, `index:latest` |
 | GET | `/direct/{object_id}` | Bypass the CDN (benchmark baseline) |
 | GET | `/cache/status` | Keys, memory and evictions per cache; circuit and pool state |
-| POST | `/cache/flush` | `{"layer": "all" \| "edges" \| "shield" \| "edge-2", "object_id": optional}` |
+| GET | `/cache/objects` | Node-by-node object inventory, surrogate keys, and TTL state |
+| POST | `/cache/flush` | `{"layer":"all|edges|shield|edge-2", "object_id": optional, "surrogate_key": optional}` |
 | GET | `/metrics` | Hit ratios, avg/p50/p95/p99 latency, throughput, origin requests, collapsing efficiency, per-node counters |
 | POST | `/metrics/reset` | Reset all counters |
 | GET | `/health` | Component availability |

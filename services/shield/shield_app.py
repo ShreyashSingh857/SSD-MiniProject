@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse, Response
 
 from cdncore import config
-from cdncore.cache import CacheStore
+from cdncore.cache import CacheStore, default_surrogate_keys
 from cdncore.node import NodeState, install_admin
 from cdncore.upstream import Fetched, NotFound, UpstreamError, fetch, new_session
 
@@ -112,9 +112,10 @@ async def fetch_from_origin(object_id: str) -> Fetched:
             pool_stats["waiting"] -= 1
     breaker.record_success()
     ttl = state.config.ttl_for(fetched.content_class, "shield")
+    surrogate_keys = fetched.headers.get("surrogate-key", "").split() or default_surrogate_keys(object_id)
     try:
         await state.store.set(object_id, fetched.body, fetched.content_type, fetched.content_class,
-                              ttl, state.config.stale_grace_seconds)
+                              ttl, state.config.stale_grace_seconds, surrogate_keys)
     except Exception:
         state.metrics.inc("cache_errors")
     return fetched
@@ -146,11 +147,12 @@ async def collapsed_fetch(object_id: str) -> tuple[Fetched, bool]:
 
 
 def respond(body: bytes, content_type: str, content_class: str, status: str, age: int = 0,
-            max_age: int = 0, remaining_ttl: int = 0) -> Response:
+            max_age: int = 0, remaining_ttl: int = 0, surrogate_keys: list[str] | None = None) -> Response:
     return Response(body, media_type=content_type, headers={
         "X-Cache-Shield": status, "X-Content-Class": content_class,
         "X-Served-By": state.node_id, "Age": str(age),
         "X-Max-Age": str(max_age), "X-Cache-TTL": str(remaining_ttl),
+        "Surrogate-Key": " ".join(surrogate_keys or []),
     })
 
 
@@ -167,7 +169,7 @@ async def get_object(object_id: str):
         if cached is not None and cached.fresh:
             state.metrics.inc("hits")
             return respond(cached.body, cached.content_type, cached.content_class, "HIT", cached.age,
-                           cached.max_age, cached.remaining_ttl)
+                           cached.max_age, cached.remaining_ttl, cached.surrogate_keys)
         state.metrics.inc("misses")
         try:
             fetched, was_collapsed = await collapsed_fetch(object_id)
@@ -179,11 +181,12 @@ async def get_object(object_id: str):
                 stale_for = max(0.0, time.time() - cached.expires_at)
                 state.metrics.observe_stale(stale_for * 1000)
                 return respond(cached.body, cached.content_type, cached.content_class, "STALE", cached.age,
-                               cached.max_age, 0)
+                               cached.max_age, 0, cached.surrogate_keys)
             state.metrics.inc("errors")
             return JSONResponse({"error": f"origin unavailable: {exc}"}, status_code=503)
         ttl = state.config.ttl_for(fetched.content_class, "shield")
         return respond(fetched.body, fetched.content_type, fetched.content_class,
-                       "COLLAPSED" if was_collapsed else "MISS", max_age=ttl, remaining_ttl=ttl)
+                       "COLLAPSED" if was_collapsed else "MISS", max_age=ttl, remaining_ttl=ttl,
+                       surrogate_keys=fetched.headers.get("surrogate-key", "").split() or default_surrogate_keys(object_id))
     finally:
         state.metrics.observe((time.perf_counter() - started) * 1000)
